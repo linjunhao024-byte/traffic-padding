@@ -4,10 +4,12 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.6+-blue?logo=python" alt="Python">
-  <img src="https://img.shields.io/badge/Platform-Linux-lightgrey?logo=linux" alt="Linux">
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
-  <img src="https://img.shields.io/badge/Dependencies-Zero-brightgreen" alt="Zero Deps">
+  <a href="https://github.com/linjunhao024-byte/traffic-padding/stargazers"><img src="https://img.shields.io/github/stars/linjunhao024-byte/traffic-padding?style=flat-square&color=yellow&logo=github" alt="Stars"></a>
+  <a href="https://github.com/linjunhao024-byte/traffic-padding/network/members"><img src="https://img.shields.io/github/forks/linjunhao024-byte/traffic-padding?style=flat-square&color=blue&logo=github" alt="Forks"></a>
+  <a href="https://github.com/linjunhao024-byte/traffic-padding/issues"><img src="https://img.shields.io/github/issues/linjunhao024-byte/traffic-padding?style=flat-square&color=red&logo=github" alt="Issues"></a>
+  <a href="https://github.com/linjunhao024-byte/traffic-padding/blob/main/LICENSE"><img src="https://img.shields.io/github/license/linjunhao024-byte/traffic-padding?style=flat-square&color=brightgreen" alt="License"></a>
+  <img src="https://img.shields.io/badge/Python-3.6+-blue?style=flat-square&logo=python" alt="Python">
+  <img src="https://img.shields.io/badge/Dependencies-Zero-brightgreen?style=flat-square" alt="Zero Deps">
 </p>
 
 ```text
@@ -22,9 +24,17 @@
                             流量伪装微服务
 ```
 
-> **如果这个项目对你有帮助，请给一个 ⭐ Star！**
->
-> 🔗 [GitHub 仓库](https://github.com/linjunhao024-byte/traffic-padding) | 📝 [提交 Issue](https://github.com/linjunhao024-byte/traffic-padding/issues)
+<p align="center">
+  专为国内代理/中转服务器设计，全天候平滑化流量特征，告别 1:1 封锁风险。
+</p>
+
+<p align="center">
+  <b>喜欢这个项目？请点击右上角的 ⭐️ Star 以示支持！</b>
+</p>
+
+<p align="center">
+  <a href="https://github.com/linjunhao024-byte/traffic-padding/issues">🔗 提交 Issue</a> | <a href="https://github.com/linjunhao024-byte/traffic-padding">📖 查看源码</a>
+</p>
 
 ---
 
