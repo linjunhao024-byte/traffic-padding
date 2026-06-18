@@ -177,6 +177,30 @@ prompt_config() {
                         ;;
                     *) TG_REPORT_FREQ="daily" ;;
                 esac
+
+                echo ""
+                echo -e "${YELLOW}💡 提示: 服务首次执行下载任务后，将自动推送一条「数据推送测试消息」${NC}"
+                echo -e "${YELLOW}   用于验证推送功能是否正常，之后将按设定频率自动推送。${NC}"
+
+                # 发送配置完成的测试消息
+                local freq_label="日报"
+                [[ "$TG_REPORT_FREQ" == "weekly" ]] && freq_label="周报"
+                [[ "$TG_REPORT_FREQ" == "monthly" ]] && freq_label="月报"
+
+                echo ""
+                log_step "发送配置确认测试消息..."
+                local confirm_result
+                confirm_result=$(curl -s -o /dev/null -w "%{http_code}" \
+                    "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+                    -d "chat_id=${TG_CHAT_ID}" \
+                    -d "text=🧪 【数据推送测试消息】%0A━━━━━━━━━━━━━━━━━━━━%0A%0A✅ TG 推送配置完成%0A%0A⚙️ 推送设置%0A├ 频率: ${freq_label}%0A└ 状态: 等待服务启动%0A%0A💡 服务启动后将自动发送启动通知，首次下载完成后将再次发送测试消息进行验证。" \
+                    -d "parse_mode=HTML" 2>/dev/null)
+
+                if [[ "$confirm_result" == "200" ]]; then
+                    echo -e "${GREEN}[✓]${NC} 配置确认消息已发送"
+                else
+                    echo -e "${YELLOW}[!]${NC} 配置确认消息发送失败，但不影响安装"
+                fi
             fi
         fi
 

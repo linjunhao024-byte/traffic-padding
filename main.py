@@ -730,6 +730,7 @@ class TrafficPaddingService:
         self.running = False
         self.cycle_count = 0
         self.last_tg_check = 0
+        self.first_task_done = False  # 首次任务完成标志
 
     def _log_stats(self):
         stats = self.downloader.get_stats()
@@ -753,6 +754,25 @@ class TrafficPaddingService:
                 if result['success']:
                     self.scheduler.record_usage(result['bytes_downloaded'])
                     log_message("INFO", f"下载 {result['bytes_downloaded'] / (1024*1024):.1f}MB 耗时 {result['duration']:.1f}s")
+
+                    # 首次任务完成时发送数据推送测试消息（仅一次）
+                    if not self.first_task_done and self.notifier.enabled:
+                        self.first_task_done = True
+                        freq_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(self.notifier.report_freq, "报告")
+                        self.notifier.send_message(
+                            f"🧪 <b>【数据推送测试消息】</b>\n"
+                            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                            f"✅ 首次下载任务已完成\n\n"
+                            f"📊 任务详情\n"
+                            f"├ 下载量: {result['bytes_downloaded'] / (1024*1024):.1f} MB\n"
+                            f"├ 耗时: {result['duration']:.1f}s\n"
+                            f"└ 来源: {url[:40]}...\n\n"
+                            f"⚙️ 推送设置\n"
+                            f"├ 频率: {freq_label}\n"
+                            f"└ 状态: 正常运行中\n\n"
+                            f"💡 这是一次性测试消息，后续将按 [{freq_label}] 频率自动推送。"
+                        )
+                        log_message("INFO", "已发送数据推送测试消息")
                 else:
                     log_message("WARN", f"下载失败: {result['error']}", throttle_key="dl_fail")
 
