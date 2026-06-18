@@ -7,7 +7,7 @@
   <a href="https://github.com/linjunhao024-byte/traffic-padding/stargazers"><img src="https://img.shields.io/github/stars/linjunhao024-byte/traffic-padding?style=flat-square&color=yellow&logo=github" alt="Stars"></a>
   <a href="https://github.com/linjunhao024-byte/traffic-padding/network/members"><img src="https://img.shields.io/github/forks/linjunhao024-byte/traffic-padding?style=flat-square&color=blue&logo=github" alt="Forks"></a>
   <a href="https://github.com/linjunhao024-byte/traffic-padding/issues"><img src="https://img.shields.io/github/issues/linjunhao024-byte/traffic-padding?style=flat-square&color=red&logo=github" alt="Issues"></a>
-  <a href="https://github.com/linjunhao024-byte/traffic-padding/blob/main/LICENSE"><img src="https://img.shields.io/github/license/linjunhao024-byte/traffic-padding?style=flat-square&color=brightgreen" alt="License"></a>
+  <a href="https://github.com/linjunhao024-byte/traffic-padding/blob/main/LICENSE"><img src="https://img.shields.io/github/license/linjunhao024-byte/traffic-padding?style=flat-square&color=brightgreen&v=1" alt="License"></a>
   <img src="https://img.shields.io/badge/Python-3.6+-blue?style=flat-square&logo=python" alt="Python">
   <img src="https://img.shields.io/badge/Dependencies-Zero-brightgreen?style=flat-square" alt="Zero Deps">
 </p>
