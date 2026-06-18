@@ -76,49 +76,191 @@ validate_interface() {
 }
 
 # ============================================================================
-# 交互配置
+# 交互配置（支持返回修改）
 # ============================================================================
 
+show_logo() {
+    clear
+    echo -e "${CYAN}"
+    echo '    __     _____   __  __             ____                        __        __                      '
+    echo '   / /    /  _/   / | / /            / __ \   ____    ____/ /   ____/ /   (_)   ____       ____   '
+    echo '  / /     / /    /  |/ /   ______   / /_/ /  / __ `/  / __  /   / __  /   / /   / __ \     / __ `/ '
+    echo ' / /___  _/ /    / /|  /   /_____/  / .___/  / /_/ /  / /_/ /   / /_/ /   / /   / / / /    / /_/ /  '
+    echo '/_____/ /___/   /_/ |_/            /_/       \__,_/   \__,_/    \__,_/   /_/   /_/ /_/     \__, /   '
+    echo '                                                                                          /____/    '
+    echo -e "${NC}"
+    echo -e "${BOLD}                         Traffic Padding Micro-Service${NC}"
+    echo -e "${BOLD}                             流量伪装微服务${NC}"
+    echo ""
+}
+
 prompt_config() {
-    echo -e "${BOLD}━━━ 步骤 1/3: 网卡配置 ━━━${NC}"
-    echo ""
+    show_logo
 
-    local detected=$(detect_interface)
-    if [[ -n "$detected" ]]; then
-        echo -e "检测到默认网卡: ${GREEN}${detected}${NC}"
-        read -rp "使用此网卡？(Y/n): " use_detected
-        INTERFACE="${detected}"
-        [[ "${use_detected,,}" == "n" ]] && read -rp "请输入网卡名称: " INTERFACE
-    else
-        read -rp "请输入网卡名称 (如 eth0): " INTERFACE
-    fi
+    while true; do
+        # 步骤 1: 网卡
+        echo -e "${BOLD}━━━ 步骤 1/5: 网卡配置 ━━━${NC}"
+        echo ""
+        local detected=$(detect_interface)
+        if [[ -n "$detected" ]]; then
+            echo -e "检测到默认网卡: ${GREEN}${detected}${NC}"
+            read -rp "使用此网卡？(Y/n): " use_detected
+            INTERFACE="${detected}"
+            [[ "${use_detected,,}" == "n" ]] && read -rp "请输入网卡名称: " INTERFACE
+        else
+            read -rp "请输入网卡名称 (如 eth0): " INTERFACE
+        fi
+        validate_interface "$INTERFACE" || log_warn "网卡 '${INTERFACE}' 可能不存在"
 
-    validate_interface "$INTERFACE" || log_warn "网卡 '${INTERFACE}' 可能不存在"
+        # 步骤 2: 流量比例
+        echo ""
+        echo -e "${BOLD}━━━ 步骤 2/5: 流量比例 ━━━${NC}"
+        echo ""
+        echo "  1:2 = 保守    1:3 = 推荐    1:4 = 激进"
+        echo ""
+        read -rp "请输入目标比例 [默认: 3]: " user_ratio
+        TARGET_RATIO="${user_ratio:-3}"
 
-    echo ""
-    echo -e "${BOLD}━━━ 步骤 2/3: 流量比例 ━━━${NC}"
-    echo ""
-    echo "  1:2 = 保守    1:3 = 推荐    1:4 = 激进"
-    echo ""
-    read -rp "请输入目标比例 [默认: 3]: " user_ratio
-    TARGET_RATIO="${user_ratio:-3}"
+        # 步骤 3: 配额设置
+        echo ""
+        echo -e "${BOLD}━━━ 步骤 3/5: 流量配额 ━━━${NC}"
+        echo ""
+        read -rp "每日最大额外下载（GB）[默认: 10]: " user_quota
+        DAILY_QUOTA="${user_quota:-10}"
+        echo ""
+        echo "服务器月流量总额度（用于计算占比）："
+        echo "  0  = 禁用月额度统计"
+        echo "  -1 = 无限流量"
+        echo "  正数 = 具体额度 (GB)"
+        echo ""
+        read -rp "月额度 [默认: 0]: " user_monthly
+        MONTHLY_QUOTA="${user_monthly:-0}"
 
-    echo ""
-    echo -e "${BOLD}━━━ 步骤 3/3: 每日配额 ━━━${NC}"
-    echo ""
-    read -rp "每日最大额外下载（GB）[默认: 10]: " user_quota
-    DAILY_QUOTA="${user_quota:-10}"
+        # 步骤 4: TG 推送设置
+        echo ""
+        echo -e "${BOLD}━━━ 步骤 4/5: TG 消息推送 ━━━${NC}"
+        echo ""
+        echo "是否启用 Telegram 机器人消息推送？"
+        echo "  启用后可接收服务运行状态的日报/周报/月报"
+        echo ""
+        read -rp "启用 TG 推送？(y/N) [默认: N]: " enable_tg
+        TG_ENABLED="false"
+        TG_BOT_TOKEN=""
+        TG_CHAT_ID=""
+        TG_REPORT_FREQ="daily"
+        TG_MONTHLY_RESET_DAY="1"
 
-    echo ""
-    echo -e "${BOLD}━━━ 配置确认 ━━━${NC}"
-    echo "┌────────────────────────────────────┐"
-    echo "│  网卡:  ${INTERFACE}"
-    echo "│  比例:  1:${TARGET_RATIO}"
-    echo "│  配额:  ${DAILY_QUOTA} GB/天"
-    echo "└────────────────────────────────────┘"
-    echo ""
-    read -rp "确认配置？(Y/n): " confirm
-    [[ "${confirm,,}" == "n" ]] && { log_warn "安装已取消"; exit 0; }
+        if [[ "${enable_tg,,}" == "y" ]]; then
+            TG_ENABLED="true"
+            echo ""
+            echo "请先创建 TG Bot：https://t.me/BotFather"
+            echo "获取 Chat ID：https://t.me/userinfobot"
+            echo ""
+
+            # 循环直到测试成功或用户跳过
+            local tg_configured=false
+            while [[ "$tg_configured" == "false" ]]; do
+                read -rp "Bot Token: " TG_BOT_TOKEN
+                read -rp "Chat ID: " TG_CHAT_ID
+
+                # 发送测试消息
+                echo ""
+                log_step "正在发送测试消息..."
+                local test_result
+                test_result=$(curl -s -o /dev/null -w "%{http_code}" \
+                    "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+                    -d "chat_id=${TG_CHAT_ID}" \
+                    -d "text=🟢 Traffic Padding 测试消息%0A安装配置正在进行中..." \
+                    -d "parse_mode=HTML" 2>/dev/null)
+
+                if [[ "$test_result" == "200" ]]; then
+                    echo -e "${GREEN}[✓]${NC} 测试消息发送成功！请检查 TG 是否收到"
+                    tg_configured=true
+                else
+                    echo ""
+                    echo -e "${RED}[✗]${NC} 测试消息发送失败 (HTTP ${test_result})"
+                    echo ""
+                    echo -e "${YELLOW}[R]${NC} 重新填写 Token 和 Chat ID"
+                    echo -e "${YELLOW}[S]${NC} 跳过 TG 推送配置"
+                    echo ""
+                    read -rp "请选择 [R/S]: " retry_choice
+                    if [[ "${retry_choice,,}" == "s" ]]; then
+                        TG_ENABLED="false"
+                        TG_BOT_TOKEN=""
+                        TG_CHAT_ID=""
+                        log_warn "已跳过 TG 推送配置"
+                        break
+                    fi
+                    echo ""
+                fi
+            done
+
+            # 如果 TG 启用成功，继续配置报告频率
+            if [[ "$TG_ENABLED" == "true" ]]; then
+                echo ""
+                echo "报告频率："
+                echo "  [1] 日报 - 每天发送"
+                echo "  [2] 周报 - 每周一发送"
+                echo "  [3] 月报 - 每月指定日期前发送"
+                echo ""
+                read -rp "选择频率 [默认: 1]: " freq_choice
+                case "${freq_choice}" in
+                    2) TG_REPORT_FREQ="weekly" ;;
+                    3)
+                        TG_REPORT_FREQ="monthly"
+                        echo ""
+                        echo "月额度重置日期（几号）："
+                        read -rp "重置日期 [默认: 1]: " reset_day
+                        TG_MONTHLY_RESET_DAY="${reset_day:-1}"
+                        ;;
+                    *) TG_REPORT_FREQ="daily" ;;
+                esac
+            fi
+        fi
+
+        # 步骤 5: 管理命令名称
+        echo ""
+        echo -e "${BOLD}━━━ 步骤 5/5: 管理命令 ━━━${NC}"
+        echo ""
+        echo "设置呼出管理菜单的快捷命令（1-3 个字符）"
+        read -rp "命令名称 [默认: tp]: " user_cmd
+        CMD_NAME="${user_cmd:-tp}"
+        CMD_NAME="${CMD_NAME:0:3}"
+
+        # 配置确认
+        echo ""
+        echo -e "${BOLD}━━━ 配置确认 ━━━${NC}"
+        echo "┌────────────────────────────────────────┐"
+        echo "│  网卡:      ${INTERFACE}"
+        echo "│  比例:      1:${TARGET_RATIO}"
+        echo "│  日配额:    ${DAILY_QUOTA} GB/天"
+        echo "│  月额度:    ${MONTHLY_QUOTA} GB"
+        echo "│  TG 推送:   ${TG_ENABLED}"
+        [[ "${TG_ENABLED}" == "true" ]] && echo "│  报告频率:  ${TG_REPORT_FREQ}"
+        echo "│  管理命令:  ${CMD_NAME}"
+        echo "└────────────────────────────────────────┘"
+        echo ""
+        echo -e "${GREEN}[Y]${NC} 确认安装"
+        echo -e "${YELLOW}[1]${NC} 重新设置网卡"
+        echo -e "${YELLOW}[2]${NC} 重新设置比例"
+        echo -e "${YELLOW}[3]${NC} 重新设置配额"
+        echo -e "${YELLOW}[4]${NC} 重新设置 TG 推送"
+        echo -e "${YELLOW}[5]${NC} 重新设置命令"
+        echo -e "${RED}[N]${NC} 取消安装"
+        echo ""
+        read -rp "请选择 [Y/1/2/3/4/5/N]: " confirm
+
+        case "${confirm,,}" in
+            y|"") return ;;
+            1) continue ;;
+            2) continue ;;
+            3) continue ;;
+            4) continue ;;
+            5) continue ;;
+            n) log_warn "安装已取消"; exit 0 ;;
+            *) continue ;;
+        esac
+    done
 }
 
 # ============================================================================
@@ -317,8 +459,10 @@ main
 TPM_EOF
 
     chmod 755 "${INSTALL_DIR}/tpm.sh"
-    ln -sf "${INSTALL_DIR}/tpm.sh" "/usr/local/bin/tpm"
-    log_info "管理命令: tpm"
+
+    # 创建用户自定义的快捷命令
+    ln -sf "${INSTALL_DIR}/tpm.sh" "/usr/local/bin/${CMD_NAME}"
+    log_info "管理命令: ${CMD_NAME}"
 }
 
 # ============================================================================
@@ -335,6 +479,7 @@ generate_config() {
     "interface": "${INTERFACE}",
     "target_ratio": ${TARGET_RATIO},
     "max_daily_extra_gb": ${DAILY_QUOTA},
+    "monthly_quota_gb": ${MONTHLY_QUOTA},
     "min_task_bytes": 2097152,
     "max_task_bytes": 15728640,
     "jitter_base": 5,
@@ -344,7 +489,12 @@ generate_config() {
     "night_end_hour": 5,
     "night_multiplier": 5.0,
     "peak_hours": [19, 20, 21, 22],
-    "peak_multiplier": 0.6
+    "peak_multiplier": 0.6,
+    "tg_enabled": ${TG_ENABLED},
+    "tg_bot_token": "${TG_BOT_TOKEN}",
+    "tg_chat_id": "${TG_CHAT_ID}",
+    "tg_report_freq": "${TG_REPORT_FREQ}",
+    "tg_monthly_reset_day": ${TG_MONTHLY_RESET_DAY}
 }
 EOF
 
@@ -428,7 +578,7 @@ show_success() {
     echo ""
     echo -e "${BOLD}管理命令:${NC}"
     echo ""
-    echo -e "  ${CYAN}tpm${NC}                     呼出管理菜单"
+    echo -e "  ${CYAN}${CMD_NAME}${NC}                     呼出管理菜单"
     echo ""
     echo -e "${BOLD}常用命令:${NC}"
     echo ""
@@ -444,6 +594,11 @@ show_success() {
     echo ""
     echo "  sudo bash install.sh uninstall"
     echo ""
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  如果这个项目对你有帮助，请给一个 ${GREEN}⭐ Star！${NC}"
+    echo -e "  ${CYAN}https://github.com/linjunhao024-byte/traffic-padding${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
 }
 
 # ============================================================================
@@ -458,14 +613,27 @@ uninstall() {
     systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
     rm -f "${SERVICE_FILE}"
     systemctl daemon-reload
-    rm -f "/usr/local/bin/tpm"
+
+    # 删除所有可能的快捷命令（tp, tpm, 以及用户自定义的）
+    rm -f /usr/local/bin/tp
+    rm -f /usr/local/bin/tpm
+    # 如果用户自定义了其他名称，也需要删除
+    [[ -n "$CMD_NAME" ]] && rm -f "/usr/local/bin/${CMD_NAME}"
+
     rm -rf "${INSTALL_DIR}"
 
     read -rp "删除配置文件 ${CONFIG_DIR}？(y/n) [n]: " del
     [[ "${del,,}" == "y" ]] && rm -rf "${CONFIG_DIR}" && echo "配置已删除"
 
     echo ""
-    echo -e "${GREEN}卸载完成！${NC}"
+    echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║                    ✅ 卸载完成                              ║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  感谢使用！如有问题或建议，欢迎提交 Issue："
+    echo -e "  ${CYAN}https://github.com/linjunhao024-byte/traffic-padding/issues${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
 

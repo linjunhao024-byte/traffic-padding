@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# =========================================================================================
+#     __     _____   __  __             ____                        __        __
+#    / /    /  _/   / | / /            / __ \   ____    ____/ /   ____/ /   (_)   ____       ____
+#   / /     / /    /  |/ /   ______   / /_/ /  / __ `/  / __  /   / __  /   / /   / __ \     / __ `/
+#  / /___  _/ /    / /|  /   /_____/  / .___/  / /_/ /  / /_/ /   / /_/ /   / /   / / / /    / /_/ /
+# /_____/ /___/   /_/ |_/            /_/       \__,_/   \__,_/    \__,_/   /_/   /_/ /_/     \__, /
+#                                                                                           /____/
+# =========================================================================================
+# Traffic Padding Micro-Service (流量伪装微服务)
+# =========================================================================================
 
+import calendar
 import json
 import os
 import random
@@ -16,13 +27,6 @@ from collections import deque
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-# ██╗     ██╗███╗   ██╗       ██████╗  █████╗ ██████╗ ██████╗ ██╗███╗   ██╗ ██████╗
-# ██║     ██║████╗  ██║       ██╔══██╗██╔══██╗██╔══██╗██╔══██╗██║████╗  ██║██╔════╝
-# ██║     ██║██╔██╗ ██║       ██████╔╝███████║██████╔╝██║  ██║██║██╔██╗ ██║██║  ███╗
-# ██║     ██║██║╚██╗██║       ██╔═══╝ ██╔══██║██╔══██╗██║  ██║██║██║╚██╗██║██║   ██║
-# ███████╗██║██║ ╚████║       ██║     ██║  ██║██║  ██║██████╔╝██║██║ ╚████║╚██████╔╝
-# ╚══════╝╚═╝╚═╝  ╚═══╝       ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ╚═╝╚═╝  ╚═══╝ ╚═════╝
-
 # ============================================================================
 # 常量
 # ============================================================================
@@ -33,6 +37,9 @@ URL_POOL_REFRESH_INTERVAL = 86400
 HTTP_TIMEOUT = 15
 SLIDING_WINDOW_SIZE = 5
 CONFIG_RELOAD_INTERVAL = 300
+
+# TG 推送检查间隔（秒）
+TG_CHECK_INTERVAL = 3600  # 每小时检查一次是否需要推送
 
 COUNTER_MAX_32BIT = 0xFFFFFFFF
 COUNTER_MAX_64BIT = 0xFFFFFFFFFFFFFFFF
@@ -591,6 +598,145 @@ class Scheduler:
 
 
 # ============================================================================
+# TelegramNotifier - TG 消息推送（日报/周报/月报）
+# ============================================================================
+
+class TelegramNotifier:
+    def __init__(self, config: Config):
+        self.config = config
+        self.enabled = config.get('tg_enabled', False)
+        self.bot_token = config.get('tg_bot_token', '')
+        self.chat_id = config.get('tg_chat_id', '')
+        self.report_freq = config.get('tg_report_freq', 'daily')
+        self.monthly_reset_day = config.get('tg_monthly_reset_day', 1)
+        self.monthly_quota_gb = config.get('monthly_quota_gb', 0)
+        self.last_report_date = ""
+
+    def send_message(self, text: str) -> bool:
+        """发送 TG 消息"""
+        if not self.enabled or not self.bot_token or not self.chat_id:
+            return False
+        try:
+            url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+            data = json.dumps({
+                "chat_id": self.chat_id,
+                "text": text,
+                "parse_mode": "HTML"
+            }).encode('utf-8')
+            req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=15, context=SSL_CONTEXT) as resp:
+                return resp.status == 200
+        except Exception as e:
+            log_message("WARN", f"TG 推送失败: {e}", throttle_key="tg_fail")
+            return False
+
+    def _should_report(self) -> bool:
+        """判断当前是否应该发送报告"""
+        now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+
+        if today == self.last_report_date:
+            return False
+
+        if self.report_freq == "daily":
+            return True
+        elif self.report_freq == "weekly":
+            return now.weekday() == 0  # 周一
+        elif self.report_freq == "monthly":
+            # 月报：在月额度重置日前 12 小时发送
+            reset_day = self.monthly_reset_day
+            current_day = now.day
+            current_hour = now.hour
+            # 如果今天是重置日的前一天，且当前时间 >= 12:00
+            if current_day == reset_day - 1 and current_hour >= 12:
+                return True
+            # 如果重置日是 1 号，上个月最后一天 >= 12:00
+            if reset_day == 1 and current_day >= 28 and current_hour >= 12:
+                # 检查是否是本月最后一天
+                _, last_day = calendar.monthrange(now.year, now.month)
+                if current_day == last_day:
+                    return True
+            return False
+        return False
+
+    def build_report(self, service: 'TrafficPaddingService') -> str:
+        """构建报告消息"""
+        now = datetime.now()
+        stats = service.downloader.get_stats()
+        quota_used = service.scheduler.daily_quota_used
+        daily_quota_gb = service.config.get('max_daily_extra_gb', 10)
+        url_count = service.url_pool.get_url_count()
+
+        # 计算月额度占比
+        monthly_usage_str = ""
+        if self.monthly_quota_gb != 0:
+            monthly_used_gb = stats['total_downloaded'] / (1024 ** 3)
+            if self.monthly_quota_gb == -1:
+                # 无限流量
+                monthly_usage_str = f"""
+📊 月流量统计
+├ 月总额度: 无限
+└ 已消耗: {monthly_used_gb:.3f} GB"""
+            elif self.monthly_quota_gb > 0:
+                # 有限额度
+                monthly_pct = (monthly_used_gb / self.monthly_quota_gb) * 100
+                monthly_usage_str = f"""
+📊 月额度使用
+├ 月总额度: {self.monthly_quota_gb:.1f} GB
+├ 已消耗: {monthly_used_gb:.3f} GB
+└ 占比: {monthly_pct:.2f}%"""
+
+        # 频率标签
+        freq_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(self.report_freq, "报告")
+
+        report = f"""📋 <b>Traffic Padding {freq_label}</b>
+━━━━━━━━━━━━━━━━━━━━
+
+🕐 时间: {now.strftime("%Y-%m-%d %H:%M")}
+
+🖥 服务状态
+├ 运行周期: {service.cycle_count}
+├ URL 池: {url_count} 个
+└ 运行时长: {self._format_uptime(service)}
+
+📈 流量统计
+├ 任务数: {stats['task_count']}
+├ 总下载: {stats['total_downloaded_mb']:.1f} MB
+└ 今日配额: {quota_used / (1024**3):.3f} / {daily_quota_gb:.1f} GB{monthly_usage_str}
+
+⚙️ 配置
+├ 网卡: {service.config.get('interface')}
+├ 比例: 1:{service.config.get('target_ratio')}
+└ 时间权重: {service.scheduler.get_time_weight():.2f}x"""
+
+        return report
+
+    def _format_uptime(self, service: 'TrafficPaddingService') -> str:
+        """格式化运行时长"""
+        # 简单估算：每个周期约 30 秒
+        seconds = service.cycle_count * 30
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        if hours > 24:
+            days = hours // 24
+            hours = hours % 24
+            return f"{days}天{hours}小时"
+        return f"{hours}小时{minutes}分钟"
+
+    def check_and_send(self, service: 'TrafficPaddingService'):
+        """检查是否需要发送报告"""
+        if not self.enabled:
+            return
+        if self._should_report():
+            report = self.build_report(service)
+            if self.send_message(report):
+                self.last_report_date = datetime.now().strftime("%Y-%m-%d")
+                log_message("INFO", f"TG {self.report_freq} 报告已发送")
+            else:
+                log_message("WARN", "TG 报告发送失败")
+
+
+# ============================================================================
 # HealthChecker - 启动健康检查
 # ============================================================================
 
@@ -661,8 +807,10 @@ class TrafficPaddingService:
         self.url_pool = URLPool()
         self.downloader = MicroTaskDownloader(self.url_pool)
         self.scheduler = Scheduler(self.config)
+        self.notifier = TelegramNotifier(self.config)
         self.running = False
         self.cycle_count = 0
+        self.last_tg_check = 0
 
     def _log_stats(self):
         stats = self.downloader.get_stats()
@@ -692,6 +840,12 @@ class TrafficPaddingService:
         if self.cycle_count % 20 == 0:
             self._log_stats()
 
+        # TG 推送检查（每小时检查一次）
+        now = time.time()
+        if now - self.last_tg_check >= TG_CHECK_INTERVAL:
+            self.last_tg_check = now
+            self.notifier.check_and_send(self)
+
         time.sleep(self.scheduler.calculate_jitter_sleep())
 
     def run(self):
@@ -703,6 +857,16 @@ class TrafficPaddingService:
         self.running = True
         self.url_pool.refresh_pool()
 
+        # 启动时发送通知
+        if self.notifier.enabled:
+            self.notifier.send_message(
+                f"🟢 <b>Traffic Padding 已启动</b>\n"
+                f"网卡: {self.config.get('interface')}\n"
+                f"比例: 1:{self.config.get('target_ratio')}\n"
+                f"日配额: {self.config.get('max_daily_extra_gb')} GB\n"
+                f"报告频率: {self.notifier.report_freq}"
+            )
+
         try:
             while self.running:
                 self.run_cycle()
@@ -710,6 +874,15 @@ class TrafficPaddingService:
             log_message("INFO", "收到停止信号")
         finally:
             self.running = False
+            # 停止时发送通知
+            if self.notifier.enabled:
+                stats = self.downloader.get_stats()
+                self.notifier.send_message(
+                    f"🔴 <b>Traffic Padding 已停止</b>\n"
+                    f"运行周期: {self.cycle_count}\n"
+                    f"总下载: {stats['total_downloaded_mb']:.1f} MB\n"
+                    f"任务数: {stats['task_count']}"
+                )
             self._log_stats()
             log_message("INFO", "服务已停止")
 
