@@ -46,6 +46,27 @@
 
 ---
 
+## 💻 系统兼容性
+
+| 系统 | 版本 | 状态 |
+|------|------|------|
+| Ubuntu | 16.04+ | ✅ 支持 |
+| Debian | 8+ | ✅ 支持 |
+| CentOS | 7+ | ✅ 支持 |
+| RHEL | 7+ | ✅ 支持 |
+| Fedora | 全版本 | ✅ 支持 |
+| Arch Linux | 全版本 | ✅ 支持 |
+| AlmaLinux / Rocky | 全版本 | ✅ 支持 |
+
+**核心依赖：**
+- `systemd` - 服务管理
+- `python3` - 运行环境（3.6+）
+- `/proc/net/dev` - Linux 内核接口
+
+> ⚠️ 不支持 macOS、Windows、Alpine Linux 及使用 SysVinit 的旧系统
+
+---
+
 ## ⚡ 一键安装
 
 复制下方对应网络环境的命令，粘贴到服务器终端按 `Enter` 即可开始安装。
