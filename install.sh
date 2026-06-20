@@ -114,93 +114,159 @@ prompt_config() {
         MONTHLY_QUOTA="${user_monthly:-0}"
 
         echo ""
-        echo -e "${BOLD}━━━ 步骤 4/5: TG 消息推送 ━━━${NC}"
+        echo -e "${BOLD}━━━ 步骤 4/5: 消息推送 ━━━${NC}"
         echo ""
-        read -rp "启用 Telegram 推送？(y/N): " enable_tg
+        read -rp "启用消息推送？(y/N): " enable_notify
+        NOTIFY_TYPE=""
         TG_ENABLED="false"
         TG_BOT_TOKEN=""
         TG_CHAT_ID=""
         TG_REPORT_FREQ="daily"
         TG_MONTHLY_RESET_DAY="1"
+        DINGTALK_ENABLED="false"
+        DINGTALK_WEBHOOK=""
+        DINGTALK_SECRET=""
+        DINGTALK_REPORT_FREQ="daily"
+        DINGTALK_MONTHLY_RESET_DAY="1"
 
-        if [[ "${enable_tg,,}" == "y" ]]; then
-            TG_ENABLED="true"
+        if [[ "${enable_notify,,}" == "y" ]]; then
             echo ""
-            echo "创建 Bot: https://t.me/BotFather"
-            echo "获取 Chat ID: https://t.me/userinfobot"
+            echo -e "${BOLD}请选择推送方式:${NC}"
             echo ""
+            echo -e "  ${CYAN}[1]${NC} 钉钉机器人 ${GREEN}(推荐 - 国内服务器首选)${NC}"
+            echo -e "  ${CYAN}[2]${NC} Telegram ${YELLOW}(需要服务器能访问 api.telegram.org)${NC}"
+            echo ""
+            echo -e "${YELLOW}⚠️  提示: 如果您的服务器在中国大陆，Telegram API 可能无法访问，${NC}"
+            echo -e "${YELLOW}    建议选择钉钉机器人。${NC}"
+            echo ""
+            read -rp "请选择 [1/2]: " notify_choice
 
-            local tg_configured=false
-            while [[ "$tg_configured" == "false" ]]; do
-                read -rp "Bot Token: " TG_BOT_TOKEN
-                read -rp "Chat ID: " TG_CHAT_ID
-
+            if [[ "$notify_choice" == "2" ]]; then
+                NOTIFY_TYPE="tg"
+                TG_ENABLED="true"
                 echo ""
-                log_step "发送测试消息..."
-                local test_result
-                test_result=$(curl -s -o /dev/null -w "%{http_code}" \
-                    "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
-                    -d "chat_id=${TG_CHAT_ID}" \
-                    -d "text=🟢 Traffic Padding 测试消息" \
-                    -d "parse_mode=HTML" 2>/dev/null)
+                echo "创建 Bot: https://t.me/BotFather"
+                echo "获取 Chat ID: https://t.me/userinfobot"
+                echo ""
 
-                if [[ "$test_result" == "200" ]]; then
-                    echo -e "${GREEN}[✓]${NC} 测试成功！请检查 TG 是否收到"
-                    tg_configured=true
-                else
-                    echo -e "${RED}[✗]${NC} 测试失败 (HTTP ${test_result})"
+                local tg_configured=false
+                while [[ "$tg_configured" == "false" ]]; do
+                    read -rp "Bot Token: " TG_BOT_TOKEN
+                    read -rp "Chat ID: " TG_CHAT_ID
+
                     echo ""
-                    echo -e "${YELLOW}[R]${NC} 重新填写"
-                    echo -e "${YELLOW}[S]${NC} 跳过 TG"
-                    echo ""
-                    read -rp "请选择 [R/S]: " retry_choice
-                    if [[ "${retry_choice,,}" == "s" ]]; then
-                        TG_ENABLED="false"
-                        TG_BOT_TOKEN=""
-                        TG_CHAT_ID=""
-                        log_warn "已跳过 TG 配置"
-                        break
+                    log_step "发送测试消息..."
+                    local test_result
+                    test_result=$(curl -s -o /dev/null -w "%{http_code}" \
+                        "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+                        -d "chat_id=${TG_CHAT_ID}" \
+                        -d "text=🟢 Traffic Padding 测试消息" \
+                        -d "parse_mode=HTML" 2>/dev/null)
+
+                    if [[ "$test_result" == "200" ]]; then
+                        echo -e "${GREEN}[✓]${NC} 测试成功！请检查 TG 是否收到"
+                        tg_configured=true
+                    else
+                        echo -e "${RED}[✗]${NC} 测试失败 (HTTP ${test_result})"
+                        echo ""
+                        echo -e "${YELLOW}[R]${NC} 重新填写"
+                        echo -e "${YELLOW}[S]${NC} 跳过推送"
+                        echo ""
+                        read -rp "请选择 [R/S]: " retry_choice
+                        if [[ "${retry_choice,,}" == "s" ]]; then
+                            TG_ENABLED="false"
+                            TG_BOT_TOKEN=""
+                            TG_CHAT_ID=""
+                            log_warn "已跳过推送配置"
+                            break
+                        fi
                     fi
+                done
+
+                if [[ "$TG_ENABLED" == "true" ]]; then
+                    echo ""
+                    echo "报告频率: [1] 日报  [2] 周报  [3] 月报"
+                    read -rp "选择 [默认: 1]: " freq_choice
+                    case "${freq_choice}" in
+                        2) TG_REPORT_FREQ="weekly" ;;
+                        3)
+                            TG_REPORT_FREQ="monthly"
+                            read -rp "月额度重置日（几号）[默认: 1]: " reset_day
+                            TG_MONTHLY_RESET_DAY="${reset_day:-1}"
+                            ;;
+                        *) TG_REPORT_FREQ="daily" ;;
+                    esac
                 fi
-            done
-
-            if [[ "$TG_ENABLED" == "true" ]]; then
+            else
+                NOTIFY_TYPE="dingtalk"
+                DINGTALK_ENABLED="true"
                 echo ""
-                echo "报告频率: [1] 日报  [2] 周报  [3] 月报"
-                read -rp "选择 [默认: 1]: " freq_choice
-                case "${freq_choice}" in
-                    2) TG_REPORT_FREQ="weekly" ;;
-                    3)
-                        TG_REPORT_FREQ="monthly"
-                        read -rp "月额度重置日（几号）[默认: 1]: " reset_day
-                        TG_MONTHLY_RESET_DAY="${reset_day:-1}"
-                        ;;
-                    *) TG_REPORT_FREQ="daily" ;;
-                esac
+                echo -e "创建钉钉机器人: 钉钉群 → 群设置 → 智能群助手 → 添加机器人 → 自定义"
+                echo -e "${YELLOW}安全设置建议选择「自定义关键词」，填写: Traffic Padding${NC}"
+                echo ""
 
+                local dt_configured=false
+                while [[ "$dt_configured" == "false" ]]; do
+                    read -rp "Webhook URL: " DINGTALK_WEBHOOK
+                    read -rp "加签密钥 (Secret，可留空): " DINGTALK_SECRET
+
+                    echo ""
+                    log_step "发送测试消息..."
+                    local dt_url="$DINGTALK_WEBHOOK"
+                    if [[ -n "$DINGTALK_SECRET" ]]; then
+                        local timestamp=$(($(date +%s) * 1000))
+                        local string_to_sign="${timestamp}\n${DINGTALK_SECRET}"
+                        local sign=$(echo -ne "$string_to_sign" | openssl dgst -sha256 -hmac "$DINGTALK_SECRET" -binary | base64)
+                        local sign_encoded=$(python3 -c "import urllib.parse; print(urllib.parse.quote_plus('$sign'))" 2>/dev/null || echo "$sign")
+                        dt_url="${dt_url}&timestamp=${timestamp}&sign=${sign_encoded}"
+                    fi
+
+                    local dt_test_result
+                    dt_test_result=$(curl -s -o /dev/null -w "%{http_code}" \
+                        -H "Content-Type: application/json" \
+                        -d '{"msgtype":"markdown","markdown":{"title":"测试","text":"## 🟢 Traffic Padding 测试消息\n\n钉钉推送配置成功！"}}' \
+                        "$dt_url" 2>/dev/null)
+
+                    if [[ "$dt_test_result" == "200" ]]; then
+                        echo -e "${GREEN}[✓]${NC} 测试成功！请检查钉钉群是否收到"
+                        dt_configured=true
+                    else
+                        echo -e "${RED}[✗]${NC} 测试失败 (HTTP ${dt_test_result})"
+                        echo ""
+                        echo -e "${YELLOW}[R]${NC} 重新填写"
+                        echo -e "${YELLOW}[S]${NC} 跳过推送"
+                        echo ""
+                        read -rp "请选择 [R/S]: " retry_choice
+                        if [[ "${retry_choice,,}" == "s" ]]; then
+                            DINGTALK_ENABLED="false"
+                            DINGTALK_WEBHOOK=""
+                            DINGTALK_SECRET=""
+                            log_warn "已跳过推送配置"
+                            break
+                        fi
+                    fi
+                done
+
+                if [[ "$DINGTALK_ENABLED" == "true" ]]; then
+                    echo ""
+                    echo "报告频率: [1] 日报  [2] 周报  [3] 月报"
+                    read -rp "选择 [默认: 1]: " freq_choice
+                    case "${freq_choice}" in
+                        2) DINGTALK_REPORT_FREQ="weekly" ;;
+                        3)
+                            DINGTALK_REPORT_FREQ="monthly"
+                            read -rp "月额度重置日（几号）[默认: 1]: " reset_day
+                            DINGTALK_MONTHLY_RESET_DAY="${reset_day:-1}"
+                            ;;
+                        *) DINGTALK_REPORT_FREQ="daily" ;;
+                    esac
+                fi
+            fi
+
+            if [[ "$TG_ENABLED" == "true" || "$DINGTALK_ENABLED" == "true" ]]; then
                 echo ""
                 echo -e "${YELLOW}💡 提示: 服务首次执行下载任务后，将自动推送一条「数据推送测试消息」${NC}"
                 echo -e "${YELLOW}   用于验证推送功能是否正常，之后将按设定频率自动推送。${NC}"
-
-                # 发送配置完成的测试消息
-                local freq_label="日报"
-                [[ "$TG_REPORT_FREQ" == "weekly" ]] && freq_label="周报"
-                [[ "$TG_REPORT_FREQ" == "monthly" ]] && freq_label="月报"
-
-                echo ""
-                log_step "发送配置确认测试消息..."
-                local confirm_result
-                confirm_result=$(curl -s -o /dev/null -w "%{http_code}" \
-                    "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
-                    -d "chat_id=${TG_CHAT_ID}" \
-                    -d "text=🧪 【数据推送测试消息】%0A━━━━━━━━━━━━━━━━━━━━%0A%0A✅ TG 推送配置完成%0A%0A⚙️ 推送设置%0A├ 频率: ${freq_label}%0A└ 状态: 等待服务启动%0A%0A💡 服务启动后将自动发送启动通知，首次下载完成后将再次发送测试消息进行验证。" \
-                    -d "parse_mode=HTML" 2>/dev/null)
-
-                if [[ "$confirm_result" == "200" ]]; then
-                    echo -e "${GREEN}[✓]${NC} 配置确认消息已发送"
-                else
-                    echo -e "${YELLOW}[!]${NC} 配置确认消息发送失败，但不影响安装"
-                fi
             fi
         fi
 
@@ -219,8 +285,15 @@ prompt_config() {
         echo "│  比例:      1:${TARGET_RATIO}"
         echo "│  日配额:    ${DAILY_QUOTA} GB/天"
         echo "│  月额度:    ${MONTHLY_QUOTA} GB"
-        echo "│  TG 推送:   ${TG_ENABLED}"
-        [[ "${TG_ENABLED}" == "true" ]] && echo "│  报告频率:  ${TG_REPORT_FREQ}"
+        if [[ "${TG_ENABLED}" == "true" ]]; then
+            echo "│  推送:      Telegram"
+            echo "│  报告频率:  ${TG_REPORT_FREQ}"
+        elif [[ "${DINGTALK_ENABLED}" == "true" ]]; then
+            echo "│  推送:      钉钉机器人"
+            echo "│  报告频率:  ${DINGTALK_REPORT_FREQ}"
+        else
+            echo "│  推送:      未启用"
+        fi
         echo "│  管理命令:  ${CMD_NAME}"
         echo "└────────────────────────────────────────┘"
         echo ""
@@ -428,7 +501,12 @@ generate_config() {
     "tg_bot_token": "${TG_BOT_TOKEN}",
     "tg_chat_id": "${TG_CHAT_ID}",
     "tg_report_freq": "${TG_REPORT_FREQ}",
-    "tg_monthly_reset_day": ${TG_MONTHLY_RESET_DAY}
+    "tg_monthly_reset_day": ${TG_MONTHLY_RESET_DAY},
+    "dingtalk_enabled": ${DINGTALK_ENABLED},
+    "dingtalk_webhook": "${DINGTALK_WEBHOOK}",
+    "dingtalk_secret": "${DINGTALK_SECRET}",
+    "dingtalk_report_freq": "${DINGTALK_REPORT_FREQ}",
+    "dingtalk_monthly_reset_day": ${DINGTALK_MONTHLY_RESET_DAY}
 }
 EOF
     log_info "配置: ${CONFIG_DIR}/config.json"

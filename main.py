@@ -14,6 +14,7 @@ import syslog
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
 import ssl
 from collections import deque
 from datetime import datetime
@@ -657,6 +658,141 @@ class TelegramNotifier:
 
 
 # ============================================================================
+# 钉钉机器人推送（日报/周报/月报）
+# ============================================================================
+
+class DingTalkNotifier:
+    def __init__(self, config: Config):
+        self.config = config
+        self.enabled = config.get('dingtalk_enabled', False)
+        self.webhook_url = config.get('dingtalk_webhook', '')
+        self.secret = config.get('dingtalk_secret', '')
+        self.report_freq = config.get('dingtalk_report_freq', 'daily')
+        self.monthly_reset_day = config.get('dingtalk_monthly_reset_day', 1)
+        self.monthly_quota_gb = config.get('monthly_quota_gb', 0)
+        self.last_report_date = ""
+
+    def _get_sign_url(self) -> str:
+        """生成加签 URL（如果配置了 secret）"""
+        if not self.secret:
+            return self.webhook_url
+        import hashlib
+        import hmac
+        import base64
+        timestamp = str(round(time.time() * 1000))
+        string_to_sign = f"{timestamp}\n{self.secret}"
+        hmac_code = hmac.new(
+            self.secret.encode('utf-8'),
+            string_to_sign.encode('utf-8'),
+            digestmod=hashlib.sha256
+        ).digest()
+        sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
+        return f"{self.webhook_url}&timestamp={timestamp}&sign={sign}"
+
+    def send_message(self, text: str) -> bool:
+        if not self.enabled or not self.webhook_url:
+            return False
+        try:
+            url = self._get_sign_url()
+            # 钉钉 markdown 消息格式
+            data = json.dumps({
+                "msgtype": "markdown",
+                "markdown": {
+                    "title": "Traffic Padding 报告",
+                    "text": text
+                }
+            }).encode('utf-8')
+            req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=15, context=SSL_CONTEXT) as resp:
+                result = json.loads(resp.read().decode('utf-8'))
+                return result.get('errcode') == 0
+        except Exception as e:
+            log_message("WARN", f"钉钉推送失败: {e}", throttle_key="dingtalk_fail")
+            return False
+
+    def _should_report(self) -> bool:
+        now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+
+        if today == self.last_report_date:
+            return False
+        if self.report_freq == "daily":
+            return True
+        elif self.report_freq == "weekly":
+            return now.weekday() == 0
+        elif self.report_freq == "monthly":
+            reset_day = self.monthly_reset_day
+            current_day = now.day
+            current_hour = now.hour
+            if current_day == reset_day - 1 and current_hour >= 12:
+                return True
+            if reset_day == 1 and current_day >= 28 and current_hour >= 12:
+                _, last_day = calendar.monthrange(now.year, now.month)
+                if current_day == last_day:
+                    return True
+            return False
+        return False
+
+    def build_report(self, service: 'TrafficPaddingService') -> str:
+        now = datetime.now()
+        stats = service.downloader.get_stats()
+        quota_used = service.scheduler.daily_quota_used
+        daily_quota_gb = service.config.get('max_daily_extra_gb', 10)
+        url_count = service.url_pool.get_url_count()
+
+        monthly_usage_str = ""
+        if self.monthly_quota_gb != 0:
+            monthly_used_gb = stats['total_downloaded'] / (1024 ** 3)
+            if self.monthly_quota_gb == -1:
+                monthly_usage_str = f"\n\n### 📊 月流量统计\n- 月总额度: 无限\n- 已消耗: {monthly_used_gb:.3f} GB"
+            elif self.monthly_quota_gb > 0:
+                monthly_pct = (monthly_used_gb / self.monthly_quota_gb) * 100
+                monthly_usage_str = f"\n\n### 📊 月额度使用\n- 月总额度: {self.monthly_quota_gb:.1f} GB\n- 已消耗: {monthly_used_gb:.3f} GB\n- 占比: {monthly_pct:.2f}%"
+
+        freq_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(self.report_freq, "报告")
+
+        return f"""## 📋 Traffic Padding {freq_label}
+
+---
+
+🕐 **{now.strftime("%Y-%m-%d %H:%M")}**
+
+### 🖥 服务状态
+- 周期: {service.cycle_count}
+- URL: {url_count} 个
+- 时长: {self._format_uptime(service)}
+
+### 📈 流量统计
+- 任务: {stats['task_count']}
+- 下载: {stats['total_downloaded_mb']:.1f} MB
+- 配额: {quota_used / (1024**3):.3f} / {daily_quota_gb:.1f} GB{monthly_usage_str}
+
+### ⚙️ 配置
+- 网卡: {service.config.get('interface')}
+- 比例: 1:{service.config.get('target_ratio')}
+- 权重: {service.scheduler.get_time_weight():.2f}x"""
+
+    def _format_uptime(self, service: 'TrafficPaddingService') -> str:
+        seconds = service.cycle_count * 30
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        if hours > 24:
+            return f"{hours // 24}天{hours % 24}小时"
+        return f"{hours}小时{minutes}分钟"
+
+    def check_and_send(self, service: 'TrafficPaddingService'):
+        if not self.enabled:
+            return
+        if self._should_report():
+            report = self.build_report(service)
+            if self.send_message(report):
+                self.last_report_date = datetime.now().strftime("%Y-%m-%d")
+                log_message("INFO", f"钉钉 {self.report_freq} 报告已发送")
+            else:
+                log_message("WARN", "钉钉报告发送失败")
+
+
+# ============================================================================
 # 启动健康检查
 # ============================================================================
 
@@ -726,11 +862,19 @@ class TrafficPaddingService:
         self.url_pool = URLPool()
         self.downloader = MicroTaskDownloader(self.url_pool)
         self.scheduler = Scheduler(self.config)
-        self.notifier = TelegramNotifier(self.config)
+        self.tg_notifier = TelegramNotifier(self.config)
+        self.dingtalk_notifier = DingTalkNotifier(self.config)
         self.running = False
         self.cycle_count = 0
         self.last_tg_check = 0
         self.first_task_done = False  # 首次任务完成标志
+
+    def _send_notification(self, text: str):
+        """同时发送到 TG 和钉钉"""
+        if self.tg_notifier.enabled:
+            self.tg_notifier.send_message(text)
+        if self.dingtalk_notifier.enabled:
+            self.dingtalk_notifier.send_message(text)
 
     def _log_stats(self):
         stats = self.downloader.get_stats()
@@ -756,22 +900,38 @@ class TrafficPaddingService:
                     log_message("INFO", f"下载 {result['bytes_downloaded'] / (1024*1024):.1f}MB 耗时 {result['duration']:.1f}s")
 
                     # 首次任务完成时发送数据推送测试消息（仅一次）
-                    if not self.first_task_done and self.notifier.enabled:
+                    if not self.first_task_done:
                         self.first_task_done = True
-                        freq_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(self.notifier.report_freq, "报告")
-                        self.notifier.send_message(
-                            f"🧪 <b>【数据推送测试消息】</b>\n"
-                            f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                            f"✅ 首次下载任务已完成\n\n"
-                            f"📊 任务详情\n"
-                            f"├ 下载量: {result['bytes_downloaded'] / (1024*1024):.1f} MB\n"
-                            f"├ 耗时: {result['duration']:.1f}s\n"
-                            f"└ 来源: {url[:40]}...\n\n"
-                            f"⚙️ 推送设置\n"
-                            f"├ 频率: {freq_label}\n"
-                            f"└ 状态: 正常运行中\n\n"
-                            f"💡 这是一次性测试消息，后续将按 [{freq_label}] 频率自动推送。"
-                        )
+                        # 确定推送渠道和频率
+                        if self.tg_notifier.enabled:
+                            freq_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(self.tg_notifier.report_freq, "报告")
+                            self.tg_notifier.send_message(
+                                f"🧪 <b>【数据推送测试消息】</b>\n"
+                                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                                f"✅ 首次下载任务已完成\n\n"
+                                f"📊 任务详情\n"
+                                f"├ 下载量: {result['bytes_downloaded'] / (1024*1024):.1f} MB\n"
+                                f"├ 耗时: {result['duration']:.1f}s\n"
+                                f"└ 来源: {url[:40]}...\n\n"
+                                f"⚙️ 推送设置\n"
+                                f"├ 频率: {freq_label}\n"
+                                f"└ 状态: 正常运行中\n\n"
+                                f"💡 这是一次性测试消息，后续将按 [{freq_label}] 频率自动推送。"
+                            )
+                        if self.dingtalk_notifier.enabled:
+                            freq_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(self.dingtalk_notifier.report_freq, "报告")
+                            self.dingtalk_notifier.send_message(
+                                f"## 🧪 【数据推送测试消息】\n\n---\n\n"
+                                f"✅ 首次下载任务已完成\n\n"
+                                f"### 📊 任务详情\n"
+                                f"- 下载量: {result['bytes_downloaded'] / (1024*1024):.1f} MB\n"
+                                f"- 耗时: {result['duration']:.1f}s\n"
+                                f"- 来源: {url[:40]}...\n\n"
+                                f"### ⚙️ 推送设置\n"
+                                f"- 频率: {freq_label}\n"
+                                f"- 状态: 正常运行中\n\n"
+                                f"> 💡 这是一次性测试消息，后续将按 [{freq_label}] 频率自动推送。"
+                            )
                         log_message("INFO", "已发送数据推送测试消息")
                 else:
                     log_message("WARN", f"下载失败: {result['error']}", throttle_key="dl_fail")
@@ -779,11 +939,12 @@ class TrafficPaddingService:
         if self.cycle_count % 20 == 0:
             self._log_stats()
 
-        # TG 推送检查
+        # 定期报告检查
         now = time.time()
         if now - self.last_tg_check >= TG_CHECK_INTERVAL:
             self.last_tg_check = now
-            self.notifier.check_and_send(self)
+            self.tg_notifier.check_and_send(self)
+            self.dingtalk_notifier.check_and_send(self)
 
         time.sleep(self.scheduler.calculate_jitter_sleep())
 
@@ -796,13 +957,22 @@ class TrafficPaddingService:
         self.running = True
         self.url_pool.refresh_pool()
 
-        if self.notifier.enabled:
-            self.notifier.send_message(
+        # 发送启动通知
+        if self.tg_notifier.enabled:
+            self.tg_notifier.send_message(
                 f"🟢 <b>Traffic Padding 已启动</b>\n"
                 f"网卡: {self.config.get('interface')}\n"
                 f"比例: 1:{self.config.get('target_ratio')}\n"
                 f"日配额: {self.config.get('max_daily_extra_gb')} GB\n"
-                f"报告频率: {self.notifier.report_freq}"
+                f"报告频率: {self.tg_notifier.report_freq}"
+            )
+        if self.dingtalk_notifier.enabled:
+            self.dingtalk_notifier.send_message(
+                f"## 🟢 Traffic Padding 已启动\n\n"
+                f"- 网卡: {self.config.get('interface')}\n"
+                f"- 比例: 1:{self.config.get('target_ratio')}\n"
+                f"- 日配额: {self.config.get('max_daily_extra_gb')} GB\n"
+                f"- 报告频率: {self.dingtalk_notifier.report_freq}"
             )
 
         try:
@@ -812,13 +982,21 @@ class TrafficPaddingService:
             log_message("INFO", "收到停止信号")
         finally:
             self.running = False
-            if self.notifier.enabled:
-                stats = self.downloader.get_stats()
-                self.notifier.send_message(
+            # 发送停止通知
+            stats = self.downloader.get_stats()
+            if self.tg_notifier.enabled:
+                self.tg_notifier.send_message(
                     f"🔴 <b>Traffic Padding 已停止</b>\n"
                     f"周期: {self.cycle_count}\n"
                     f"下载: {stats['total_downloaded_mb']:.1f} MB\n"
                     f"任务: {stats['task_count']}"
+                )
+            if self.dingtalk_notifier.enabled:
+                self.dingtalk_notifier.send_message(
+                    f"## 🔴 Traffic Padding 已停止\n\n"
+                    f"- 周期: {self.cycle_count}\n"
+                    f"- 下载: {stats['total_downloaded_mb']:.1f} MB\n"
+                    f"- 任务: {stats['task_count']}"
                 )
             self._log_stats()
             log_message("INFO", "服务已停止")
