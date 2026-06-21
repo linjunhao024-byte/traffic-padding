@@ -87,48 +87,68 @@ prompt_config() {
     show_logo
 
     while true; do
-        echo -e "${BOLD}━━━ 步骤 1/5: 网卡配置 ━━━${NC}"
-        echo ""
-        list_interfaces
-        echo ""
+        echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║${NC}  ${BOLD}步骤 1/5: 网卡配置${NC}                                       ${CYAN}║${NC}"
+        echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
+        echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        list_interfaces | sed 's/^/  /' | while IFS= read -r line; do
+            printf "${CYAN}║${NC}  %-58s${CYAN}║${NC}\n" "$line"
+        done
+        echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
         local detected=$(detect_interface)
         if [[ -n "$detected" ]]; then
-            echo -e "检测到默认网卡: ${GREEN}${detected}${NC}"
-            echo -e "${YELLOW}💡 提示: 一般选择默认网卡即可，中转流量走的就是这个接口。${NC}"
-            echo -e "${YELLOW}   如果有 warp/docker 等虚拟网卡，通常不需要选它们。${NC}"
-            echo ""
-            read -rp "使用此网卡？(Y/n): " use_detected
+            printf "${CYAN}║${NC}  检测到默认网卡: ${GREEN}%-42s${NC}${CYAN}║${NC}\n" "${detected}"
+            echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+            echo -e "${CYAN}║${NC}  ${YELLOW}💡 一般选择默认网卡即可，中转流量走的就是这个接口${NC}       ${CYAN}║${NC}"
+            echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+            echo -ne "${CYAN}║${NC}  使用此网卡？(${GREEN}Y${NC}/n): "
+            read use_detected
             INTERFACE="${detected}"
-            [[ "${use_detected,,}" == "n" ]] && read -rp "请输入网卡名称: " INTERFACE
+            [[ "${use_detected,,}" == "n" ]] && { echo -ne "${CYAN}║${NC}  请输入网卡名称: "; read INTERFACE; }
         else
-            read -rp "请输入网卡名称 (如 eth0): " INTERFACE
+            echo -ne "${CYAN}║${NC}  请输入网卡名称 (如 eth0): "
+            read INTERFACE
         fi
         validate_interface "$INTERFACE" || log_warn "网卡 '${INTERFACE}' 可能不存在"
+        echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
 
         echo ""
-        echo -e "${BOLD}━━━ 步骤 2/5: 流量比例 ━━━${NC}"
-        echo ""
-        echo "  [2] 1:2 = 保守"
-        echo "  [3] 1:3 = 推荐"
-        echo "  [4] 1:4 = 激进"
-        echo ""
-        read -rp "请选择 [默认: 3]: " user_ratio
+        echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║${NC}  ${BOLD}步骤 2/5: 流量比例${NC}                                       ${CYAN}║${NC}"
+        echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
+        echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        echo -e "${CYAN}║${NC}    ${CYAN}[2]${NC} 1:2 = 保守                                          ${CYAN}║${NC}"
+        echo -e "${CYAN}║${NC}    ${GREEN}[3]${NC} 1:3 = 推荐 ${GREEN}← 默认${NC}                                  ${CYAN}║${NC}"
+        echo -e "${CYAN}║${NC}    ${YELLOW}[4]${NC} 1:4 = 激进                                          ${CYAN}║${NC}"
+        echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        echo -ne "${CYAN}║${NC}  请选择 [默认: 3]: "
+        read user_ratio
         TARGET_RATIO="${user_ratio:-3}"
+        echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
 
         echo ""
-        echo -e "${BOLD}━━━ 步骤 3/5: 流量配额 ━━━${NC}"
-        echo ""
-        read -rp "每日最大额外下载（GB）[默认: 10]: " user_quota
+        echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║${NC}  ${BOLD}步骤 3/5: 流量配额${NC}                                       ${CYAN}║${NC}"
+        echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
+        echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        echo -ne "${CYAN}║${NC}  每日最大额外下载 (GB) [默认: 10]: "
+        read user_quota
         DAILY_QUOTA="${user_quota:-10}"
-        echo ""
-        echo "月流量总额度：0=禁用  -1=无限  正数=具体额度(GB)"
-        read -rp "月额度 [默认: 0]: " user_monthly
+        echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        echo -e "${CYAN}║${NC}  月流量总额度: ${CYAN}0${NC}=禁用  ${GREEN}-1${NC}=无限  ${YELLOW}正数${NC}=具体额度(GB)         ${CYAN}║${NC}"
+        echo -ne "${CYAN}║${NC}  月额度 [默认: 0]: "
+        read user_monthly
         MONTHLY_QUOTA="${user_monthly:-0}"
+        echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
 
         echo ""
-        echo -e "${BOLD}━━━ 步骤 4/5: 消息推送 ━━━${NC}"
-        echo ""
-        read -rp "启用消息推送？(y/N): " enable_notify
+        echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║${NC}  ${BOLD}步骤 4/5: 消息推送${NC}                                       ${CYAN}║${NC}"
+        echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
+        echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        echo -ne "${CYAN}║${NC}  启用消息推送？(y/N): "
+        read enable_notify
         NOTIFY_TYPE=""
         TG_ENABLED="false"
         TG_BOT_TOKEN=""
@@ -142,31 +162,30 @@ prompt_config() {
         DINGTALK_MONTHLY_RESET_DAY="1"
 
         if [[ "${enable_notify,,}" == "y" ]]; then
-            echo ""
-            echo -e "${BOLD}请选择推送方式:${NC}"
-            echo ""
-            echo -e "  ${CYAN}[1]${NC} 钉钉机器人 ${GREEN}(推荐 - 国内服务器首选)${NC}"
-            echo -e "  ${CYAN}[2]${NC} Telegram ${YELLOW}(需要服务器能访问 api.telegram.org)${NC}"
-            echo ""
-            echo -e "${YELLOW}⚠️  提示: 如果您的服务器在中国大陆，Telegram API 可能无法访问，${NC}"
-            echo -e "${YELLOW}    建议选择钉钉机器人。${NC}"
-            echo ""
-            read -rp "请选择 [1/2]: " notify_choice
+            echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+            echo -e "${CYAN}║${NC}  ${BOLD}请选择推送方式:${NC}                                          ${CYAN}║${NC}"
+            echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+            echo -e "${CYAN}║${NC}    ${CYAN}[1]${NC} 钉钉机器人 ${GREEN}(推荐 - 国内服务器首选)${NC}                  ${CYAN}║${NC}"
+            echo -e "${CYAN}║${NC}    ${CYAN}[2]${NC} Telegram ${YELLOW}(需要能访问 api.telegram.org)${NC}            ${CYAN}║${NC}"
+            echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+            echo -e "${CYAN}║${NC}  ${YELLOW}⚠️  国内服务器建议选择钉钉机器人${NC}                           ${CYAN}║${NC}"
+            echo -ne "${CYAN}║${NC}  请选择 [1/2]: "
+            read notify_choice
 
             if [[ "$notify_choice" == "2" ]]; then
                 NOTIFY_TYPE="tg"
                 TG_ENABLED="true"
-                echo ""
-                echo "创建 Bot: https://t.me/BotFather"
-                echo "获取 Chat ID: https://t.me/userinfobot"
-                echo ""
+                echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+                echo -e "${CYAN}║${NC}  创建 Bot: https://t.me/BotFather                          ${CYAN}║${NC}"
+                echo -e "${CYAN}║${NC}  获取 Chat ID: https://t.me/userinfobot                    ${CYAN}║${NC}"
 
                 local tg_configured=false
                 while [[ "$tg_configured" == "false" ]]; do
-                    read -rp "Bot Token: " TG_BOT_TOKEN
-                    read -rp "Chat ID: " TG_CHAT_ID
+                    echo -ne "${CYAN}║${NC}  Bot Token: "
+                    read TG_BOT_TOKEN
+                    echo -ne "${CYAN}║${NC}  Chat ID: "
+                    read TG_CHAT_ID
 
-                    echo ""
                     log_step "发送测试消息..."
                     local test_result
                     test_result=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -176,15 +195,13 @@ prompt_config() {
                         -d "parse_mode=HTML" 2>/dev/null)
 
                     if [[ "$test_result" == "200" ]]; then
-                        echo -e "${GREEN}[✓]${NC} 测试成功！请检查 TG 是否收到"
+                        echo -e "${CYAN}║${NC}  ${GREEN}[✓]${NC} 测试成功！请检查 TG 是否收到                       ${CYAN}║${NC}"
                         tg_configured=true
                     else
-                        echo -e "${RED}[✗]${NC} 测试失败 (HTTP ${test_result})"
-                        echo ""
-                        echo -e "${YELLOW}[R]${NC} 重新填写"
-                        echo -e "${YELLOW}[S]${NC} 跳过推送"
-                        echo ""
-                        read -rp "请选择 [R/S]: " retry_choice
+                        echo -e "${CYAN}║${NC}  ${RED}[✗]${NC} 测试失败 (HTTP ${test_result})                           ${CYAN}║${NC}"
+                        echo -e "${CYAN}║${NC}    ${YELLOW}[R]${NC} 重新填写  ${YELLOW}[S]${NC} 跳过推送                              ${CYAN}║${NC}"
+                        echo -ne "${CYAN}║${NC}  请选择 [R/S]: "
+                        read retry_choice
                         if [[ "${retry_choice,,}" == "s" ]]; then
                             TG_ENABLED="false"
                             TG_BOT_TOKEN=""
@@ -196,14 +213,16 @@ prompt_config() {
                 done
 
                 if [[ "$TG_ENABLED" == "true" ]]; then
-                    echo ""
-                    echo "报告频率: [1] 日报  [2] 周报  [3] 月报"
-                    read -rp "选择 [默认: 1]: " freq_choice
+                    echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+                    echo -e "${CYAN}║${NC}  报告频率: ${CYAN}[1]${NC} 日报  ${CYAN}[2]${NC} 周报  ${CYAN}[3]${NC} 月报                    ${CYAN}║${NC}"
+                    echo -ne "${CYAN}║${NC}  选择 [默认: 1]: "
+                    read freq_choice
                     case "${freq_choice}" in
                         2) TG_REPORT_FREQ="weekly" ;;
                         3)
                             TG_REPORT_FREQ="monthly"
-                            read -rp "月额度重置日（几号）[默认: 1]: " reset_day
+                            echo -ne "${CYAN}║${NC}  月额度重置日（几号）[默认: 1]: "
+                            read reset_day
                             TG_MONTHLY_RESET_DAY="${reset_day:-1}"
                             ;;
                         *) TG_REPORT_FREQ="daily" ;;
@@ -212,17 +231,18 @@ prompt_config() {
             else
                 NOTIFY_TYPE="dingtalk"
                 DINGTALK_ENABLED="true"
-                echo ""
-                echo -e "创建钉钉机器人: 钉钉群 → 群设置 → 智能群助手 → 添加机器人 → 自定义"
-                echo -e "${YELLOW}安全设置建议选择「自定义关键词」，填写: Traffic Padding${NC}"
-                echo ""
+                echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+                echo -e "${CYAN}║${NC}  创建钉钉机器人:                                          ${CYAN}║${NC}"
+                echo -e "${CYAN}║${NC}  钉钉群 → 群设置 → 智能群助手 → 添加机器人 → 自定义         ${CYAN}║${NC}"
+                echo -e "${CYAN}║${NC}  ${YELLOW}安全设置选「自定义关键词」，填写: Traffic Padding${NC}          ${CYAN}║${NC}"
 
                 local dt_configured=false
                 while [[ "$dt_configured" == "false" ]]; do
-                    read -rp "Webhook URL: " DINGTALK_WEBHOOK
-                    read -rp "加签密钥 (Secret，可留空): " DINGTALK_SECRET
+                    echo -ne "${CYAN}║${NC}  Webhook URL: "
+                    read DINGTALK_WEBHOOK
+                    echo -ne "${CYAN}║${NC}  加签密钥 (Secret，可留空): "
+                    read DINGTALK_SECRET
 
-                    echo ""
                     log_step "发送测试消息..."
                     local dt_url="$DINGTALK_WEBHOOK"
                     if [[ -n "$DINGTALK_SECRET" ]]; then
@@ -240,15 +260,13 @@ prompt_config() {
                         "$dt_url" 2>/dev/null)
 
                     if [[ "$dt_test_result" == "200" ]]; then
-                        echo -e "${GREEN}[✓]${NC} 测试成功！请检查钉钉群是否收到"
+                        echo -e "${CYAN}║${NC}  ${GREEN}[✓]${NC} 测试成功！请检查钉钉群是否收到                       ${CYAN}║${NC}"
                         dt_configured=true
                     else
-                        echo -e "${RED}[✗]${NC} 测试失败 (HTTP ${dt_test_result})"
-                        echo ""
-                        echo -e "${YELLOW}[R]${NC} 重新填写"
-                        echo -e "${YELLOW}[S]${NC} 跳过推送"
-                        echo ""
-                        read -rp "请选择 [R/S]: " retry_choice
+                        echo -e "${CYAN}║${NC}  ${RED}[✗]${NC} 测试失败 (HTTP ${dt_test_result})                           ${CYAN}║${NC}"
+                        echo -e "${CYAN}║${NC}    ${YELLOW}[R]${NC} 重新填写  ${YELLOW}[S]${NC} 跳过推送                              ${CYAN}║${NC}"
+                        echo -ne "${CYAN}║${NC}  请选择 [R/S]: "
+                        read retry_choice
                         if [[ "${retry_choice,,}" == "s" ]]; then
                             DINGTALK_ENABLED="false"
                             DINGTALK_WEBHOOK=""
@@ -260,14 +278,16 @@ prompt_config() {
                 done
 
                 if [[ "$DINGTALK_ENABLED" == "true" ]]; then
-                    echo ""
-                    echo "报告频率: [1] 日报  [2] 周报  [3] 月报"
-                    read -rp "选择 [默认: 1]: " freq_choice
+                    echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+                    echo -e "${CYAN}║${NC}  报告频率: ${CYAN}[1]${NC} 日报  ${CYAN}[2]${NC} 周报  ${CYAN}[3]${NC} 月报                    ${CYAN}║${NC}"
+                    echo -ne "${CYAN}║${NC}  选择 [默认: 1]: "
+                    read freq_choice
                     case "${freq_choice}" in
                         2) DINGTALK_REPORT_FREQ="weekly" ;;
                         3)
                             DINGTALK_REPORT_FREQ="monthly"
-                            read -rp "月额度重置日（几号）[默认: 1]: " reset_day
+                            echo -ne "${CYAN}║${NC}  月额度重置日（几号）[默认: 1]: "
+                            read reset_day
                             DINGTALK_MONTHLY_RESET_DAY="${reset_day:-1}"
                             ;;
                         *) DINGTALK_REPORT_FREQ="daily" ;;
@@ -276,44 +296,53 @@ prompt_config() {
             fi
 
             if [[ "$TG_ENABLED" == "true" || "$DINGTALK_ENABLED" == "true" ]]; then
-                echo ""
-                echo -e "${YELLOW}💡 提示: 服务首次执行下载任务后，将自动推送一条「数据推送测试消息」${NC}"
-                echo -e "${YELLOW}   用于验证推送功能是否正常，之后将按设定频率自动推送。${NC}"
+                echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+                echo -e "${CYAN}║${NC}  ${YELLOW}💡 首次下载任务后将自动推送测试消息进行验证${NC}                ${CYAN}║${NC}"
             fi
         fi
+        echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
 
         echo ""
-        echo -e "${BOLD}━━━ 步骤 5/5: 管理命令 ━━━${NC}"
-        echo ""
-        read -rp "快捷命令名称（1-3字符）[默认: tp]: " user_cmd
+        echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║${NC}  ${BOLD}步骤 5/5: 管理命令${NC}                                       ${CYAN}║${NC}"
+        echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
+        echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        echo -ne "${CYAN}║${NC}  快捷命令名称（1-3字符）[默认: tp]: "
+        read user_cmd
         CMD_NAME="${user_cmd:-tp}"
         CMD_NAME="${CMD_NAME:0:3}"
+        echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
 
         # 配置确认
         echo ""
-        echo -e "${BOLD}━━━ 配置确认 ━━━${NC}"
-        echo "┌────────────────────────────────────────┐"
-        echo "│  网卡:      ${INTERFACE}"
-        echo "│  比例:      1:${TARGET_RATIO}"
-        echo "│  日配额:    ${DAILY_QUOTA} GB/天"
-        echo "│  月额度:    ${MONTHLY_QUOTA} GB"
+        echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║${NC}  ${BOLD}📋 配置确认${NC}                                              ${CYAN}║${NC}"
+        echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
+        echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        printf "${CYAN}║${NC}    网卡:      ${GREEN}%-46s${NC}${CYAN}║${NC}\n" "${INTERFACE}"
+        printf "${CYAN}║${NC}    比例:      ${GREEN}%-46s${NC}${CYAN}║${NC}\n" "1:${TARGET_RATIO}"
+        printf "${CYAN}║${NC}    日配额:    ${GREEN}%-46s${NC}${CYAN}║${NC}\n" "${DAILY_QUOTA} GB/天"
+        printf "${CYAN}║${NC}    月额度:    ${GREEN}%-46s${NC}${CYAN}║${NC}\n" "${MONTHLY_QUOTA} GB"
         if [[ "${TG_ENABLED}" == "true" ]]; then
-            echo "│  推送:      Telegram"
-            echo "│  报告频率:  ${TG_REPORT_FREQ}"
+            printf "${CYAN}║${NC}    推送:      ${GREEN}%-46s${NC}${CYAN}║${NC}\n" "Telegram"
+            printf "${CYAN}║${NC}    报告频率:  ${GREEN}%-46s${NC}${CYAN}║${NC}\n" "${TG_REPORT_FREQ}"
         elif [[ "${DINGTALK_ENABLED}" == "true" ]]; then
-            echo "│  推送:      钉钉机器人"
-            echo "│  报告频率:  ${DINGTALK_REPORT_FREQ}"
+            printf "${CYAN}║${NC}    推送:      ${GREEN}%-46s${NC}${CYAN}║${NC}\n" "钉钉机器人"
+            printf "${CYAN}║${NC}    报告频率:  ${GREEN}%-46s${NC}${CYAN}║${NC}\n" "${DINGTALK_REPORT_FREQ}"
         else
-            echo "│  推送:      未启用"
+            printf "${CYAN}║${NC}    推送:      ${YELLOW}%-46s${NC}${CYAN}║${NC}\n" "未启用"
         fi
-        echo "│  管理命令:  ${CMD_NAME}"
-        echo "└────────────────────────────────────────┘"
-        echo ""
-        echo -e "${GREEN}[Y]${NC} 确认安装"
-        echo -e "${YELLOW}[1-5]${NC} 重新设置对应项"
-        echo -e "${RED}[N]${NC} 取消"
-        echo ""
-        read -rp "请选择: " confirm
+        printf "${CYAN}║${NC}    管理命令:  ${GREEN}%-46s${NC}${CYAN}║${NC}\n" "${CMD_NAME}"
+        echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
+        echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        echo -e "${CYAN}║${NC}    ${GREEN}[Y]${NC} 确认安装    ${YELLOW}[1-5]${NC} 重新设置    ${RED}[N]${NC} 取消              ${CYAN}║${NC}"
+        echo -e "${CYAN}║${NC}                                                            ${CYAN}║${NC}"
+        echo -ne "${CYAN}║${NC}  请选择: "
+        read confirm
+        echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
 
         case "${confirm,,}" in
             y|"") return ;;
@@ -329,18 +358,22 @@ prompt_config() {
 # ============================================================================
 
 install_files() {
-    log_step "安装程序文件..."
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}  ${BOLD}安装程序文件${NC}                                              ${CYAN}║${NC}"
+    echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
     mkdir -p "${INSTALL_DIR}"
 
     local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     if [[ -f "${script_dir}/main.py" ]]; then
         cp "${script_dir}/main.py" "${INSTALL_DIR}/main.py"
         chmod 755 "${INSTALL_DIR}/main.py"
-        log_info "main.py (本地文件)"
+        echo -e "${CYAN}║${NC}  ${GREEN}[✓]${NC} main.py (本地文件)                                       ${CYAN}║${NC}"
     else
-        log_error "未找到 main.py，请确保与 install.sh 在同一目录"
+        echo -e "${CYAN}║${NC}  ${RED}[✗]${NC} 未找到 main.py                                         ${CYAN}║${NC}"
+        echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
         exit 1
     fi
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
 }
 
 # ============================================================================
@@ -348,7 +381,9 @@ install_files() {
 # ============================================================================
 
 generate_tpm() {
-    log_step "生成管理脚本..."
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}  ${BOLD}生成管理脚本${NC}                                              ${CYAN}║${NC}"
+    echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
 
     cat > "${INSTALL_DIR}/tpm.sh" << 'TPM_EOF'
 #!/bin/bash
@@ -489,7 +524,8 @@ TPM_EOF
 
     chmod 755 "${INSTALL_DIR}/tpm.sh"
     ln -sf "${INSTALL_DIR}/tpm.sh" "/usr/local/bin/${CMD_NAME}"
-    log_info "管理命令: ${CMD_NAME}"
+    echo -e "${CYAN}║${NC}  ${GREEN}[✓]${NC} 管理命令: ${CMD_NAME}                                          ${CYAN}║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
 }
 
 # ============================================================================
@@ -497,7 +533,9 @@ TPM_EOF
 # ============================================================================
 
 generate_config() {
-    log_step "生成配置文件..."
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}  ${BOLD}生成配置文件${NC}                                              ${CYAN}║${NC}"
+    echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
     mkdir -p "${CONFIG_DIR}"
 
     cat > "${CONFIG_DIR}/config.json" << EOF
@@ -528,11 +566,14 @@ generate_config() {
     "dingtalk_monthly_reset_day": ${DINGTALK_MONTHLY_RESET_DAY}
 }
 EOF
-    log_info "配置: ${CONFIG_DIR}/config.json"
+    echo -e "${CYAN}║${NC}  ${GREEN}[✓]${NC} 配置: ${CONFIG_DIR}/config.json                              ${CYAN}║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
 }
 
 generate_service() {
-    log_step "注册系统服务..."
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}  ${BOLD}注册系统服务${NC}                                              ${CYAN}║${NC}"
+    echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
 
     cat > "${SERVICE_FILE}" << 'EOF'
 [Unit]
@@ -568,22 +609,27 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    log_info "服务: ${SERVICE_FILE}"
+    echo -e "${CYAN}║${NC}  ${GREEN}[✓]${NC} 服务: ${SERVICE_FILE}                                     ${CYAN}║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
 }
 
 start_service() {
-    log_step "启动服务..."
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}  ${BOLD}启动服务${NC}                                                  ${CYAN}║${NC}"
+    echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
     systemctl enable "${SERVICE_NAME}" 2>/dev/null
     systemctl start "${SERVICE_NAME}"
     sleep 2
 
     if systemctl is-active --quiet "${SERVICE_NAME}"; then
-        log_info "服务启动成功"
+        echo -e "${CYAN}║${NC}  ${GREEN}[✓]${NC} 服务启动成功                                           ${CYAN}║${NC}"
     else
-        log_error "服务启动失败"
-        echo "查看日志: journalctl -u ${SERVICE_NAME} -n 20"
+        echo -e "${CYAN}║${NC}  ${RED}[✗]${NC} 服务启动失败                                           ${CYAN}║${NC}"
+        echo -e "${CYAN}║${NC}  查看日志: journalctl -u ${SERVICE_NAME} -n 20                   ${CYAN}║${NC}"
+        echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
         exit 1
     fi
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
 }
 
 # ============================================================================
@@ -593,31 +639,35 @@ start_service() {
 show_success() {
     echo ""
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║                  🎉 安装成功！                              ║${NC}"
+    echo -e "${GREEN}║${NC}                                                            ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}              🎉  ${BOLD}安装成功！${NC}  🎉                          ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}                                                            ${GREEN}║${NC}"
+    echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${GREEN}║${NC}                                                            ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}  ${BOLD}管理命令:${NC}                                                ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}                                                            ${GREEN}║${NC}"
+    printf "${GREEN}║${NC}    ${CYAN}%-10s${NC} 呼出管理菜单                                 ${GREEN}║${NC}\n" "${CMD_NAME}"
+    echo -e "${GREEN}║${NC}                                                            ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}  ${BOLD}常用命令:${NC}                                                ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}                                                            ${GREEN}║${NC}"
+    printf "${GREEN}║${NC}    ${CYAN}%-40s${NC} 查看状态    ${GREEN}║${NC}\n" "systemctl status ${SERVICE_NAME}"
+    printf "${GREEN}║${NC}    ${CYAN}%-40s${NC} 查看日志    ${GREEN}║${NC}\n" "journalctl -u ${SERVICE_NAME} -f"
+    printf "${GREEN}║${NC}    ${CYAN}%-40s${NC} 重启服务    ${GREEN}║${NC}\n" "systemctl restart ${SERVICE_NAME}"
+    echo -e "${GREEN}║${NC}                                                            ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}  ${BOLD}配置文件:${NC}                                                ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}                                                            ${GREEN}║${NC}"
+    printf "${GREEN}║${NC}    ${CYAN}%-40s${NC} 修改后 5 分钟自动生效  ${GREEN}║${NC}\n" "${CONFIG_DIR}/config.json"
+    echo -e "${GREEN}║${NC}                                                            ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}  ${BOLD}卸载:${NC}                                                    ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}                                                            ${GREEN}║${NC}"
+    printf "${GREEN}║${NC}    ${CYAN}%-40s${NC}                   ${GREEN}║${NC}\n" "sudo bash install.sh uninstall"
+    echo -e "${GREEN}║${NC}                                                            ${GREEN}║${NC}"
+    echo -e "${GREEN}╠══════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${GREEN}║${NC}                                                            ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}    如果这个项目对你有帮助，请给一个 ${YELLOW}⭐ Star！${NC}               ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}    ${CYAN}https://github.com/linjunhao024-byte/Traffic-Tadding${NC}     ${GREEN}║${NC}"
+    echo -e "${GREEN}║${NC}                                                            ${GREEN}║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "${BOLD}管理命令:${NC}"
-    echo ""
-    echo -e "  ${CYAN}${CMD_NAME}${NC}                     呼出管理菜单"
-    echo ""
-    echo -e "${BOLD}常用命令:${NC}"
-    echo ""
-    echo "  systemctl status ${SERVICE_NAME}    查看状态"
-    echo "  journalctl -u ${SERVICE_NAME} -f    查看日志"
-    echo "  systemctl restart ${SERVICE_NAME}   重启服务"
-    echo ""
-    echo -e "${BOLD}配置文件:${NC}"
-    echo ""
-    echo "  ${CONFIG_DIR}/config.json   修改后 5 分钟自动生效"
-    echo ""
-    echo -e "${BOLD}卸载:${NC}"
-    echo ""
-    echo "  sudo bash install.sh uninstall"
-    echo ""
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  如果这个项目对你有帮助，请给一个 ${GREEN}⭐ Star！${NC}"
-    echo -e "  ${CYAN}https://github.com/linjunhao024-byte/Traffic-Tadding${NC}"
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
 
@@ -650,7 +700,10 @@ uninstall() {
 main() {
     echo -e "${CYAN}"
     echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║                                                            ║"
     echo "║         Traffic Padding Micro-Service 安装程序              ║"
+    echo "║                       流量伪装微服务                        ║"
+    echo "║                                                            ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 
@@ -660,10 +713,13 @@ main() {
         exit 0
     fi
 
-    log_step "检查环境..."
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}  ${BOLD}环境检查${NC}                                                  ${CYAN}║${NC}"
+    echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
     check_root
     check_commands
-    log_info "环境检查通过"
+    echo -e "${CYAN}║${NC}  ${GREEN}[✓]${NC} 环境检查通过                                           ${CYAN}║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
     prompt_config
