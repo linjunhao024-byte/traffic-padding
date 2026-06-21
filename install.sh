@@ -486,12 +486,12 @@ main() {
         echo -e "${BOLD}服务控制${NC}       ${BOLD}日志${NC}           ${BOLD}配置${NC}           ${BOLD}系统${NC}"
         echo "  [1] 查看状态    [5] 实时日志    [7] 查看配置    [9] 开机自启"
         echo "  [2] 启动服务    [6] 最近日志    [8] 编辑配置   [10] 取消自启"
-        echo "  [3] 停止服务                               [11] 网卡测试"
+        echo "  [3] 停止服务    ${GREEN}[13] 手动推送${NC}  [11] 网卡测试"
         echo "  [4] 重启服务                               [12] ⚠️ 卸载"
         echo ""
         echo "  [0] 退出"
         echo ""
-        read -rp "选择 [0-12]: " choice
+        read -rp "选择 [0-13]: " choice
 
         case "$choice" in
             1) systemctl status "${SERVICE_NAME}" --no-pager; wait_key ;;
@@ -513,6 +513,15 @@ main() {
             10) need_root && systemctl disable "${SERVICE_NAME}" && log_info "已取消"; wait_key ;;
             11) grep "$(python3 -c "import json;print(json.load(open('${CONFIG_DIR}/config.json')).get('interface','eth0'))" 2>/dev/null || echo 'eth0'):" /proc/net/dev 2>/dev/null || echo "网卡读取失败"; wait_key ;;
             12) need_root && do_uninstall ;;
+            13)
+                if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
+                    systemctl kill -s SIGUSR1 "${SERVICE_NAME}"
+                    echo -e "${GREEN}[✓]${NC} 已发送推送请求，请检查钉钉/TG"
+                else
+                    echo -e "${RED}[✗]${NC} 服务未运行"
+                fi
+                wait_key
+                ;;
             0) clear; exit 0 ;;
             *) echo -e "${RED}无效选项${NC}"; sleep 1 ;;
         esac
