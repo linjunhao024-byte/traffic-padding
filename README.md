@@ -80,6 +80,7 @@ cd /tmp && wget -q https://ghfast.top/https://raw.githubusercontent.com/linjunha
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
+| 服务器名称 | 自定义名称，显示在推送消息中 | Realm中转服务器 |
 | 网卡 | 自动检测，回车确认 | eth0 |
 | 流量比例 | (a)1:2 (b)1:3 (c)1:4 (d)1:5 | b (1:3) |
 | 每日配额 | 最大额外下载量 | 10 GB |
@@ -155,6 +156,7 @@ Traffic-Tadding/                   /opt/traffic-padding/
 
 ```json
 {
+    "server_name": "Realm中转服务器",   // 服务器名称（显示在推送消息中）
     "interface": "eth0",              // 监控网卡
     "target_ratio": 3.0,              // 下行:上行比例 (2/3/4/5)
     "max_daily_extra_gb": 10.0,       // 每日配额 (GB)

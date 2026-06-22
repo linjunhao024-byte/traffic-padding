@@ -345,8 +345,12 @@ prompt_config() {
 
         # ─── 步骤 5: 管理命令 ─────────────────────────────────────────
         echo -e "${CYAN}┌──────────────────────────────────────────────────────────────┐${NC}"
-        echo -e "${CYAN}│${NC}  ${BOLD}步骤 5/5${NC}  管理命令                                         ${CYAN}│${NC}"
+        echo -e "${CYAN}│${NC}  ${BOLD}步骤 5/5${NC}  基本设置                                         ${CYAN}│${NC}"
         echo -e "${CYAN}├──────────────────────────────────────────────────────────────┤${NC}"
+        echo -e "${CYAN}│${NC}                                                            ${CYAN}│${NC}"
+        echo -ne "${CYAN}│${NC}  服务器名称 [默认: Realm中转服务器]: "
+        read server_name
+        SERVER_NAME="${server_name:-Realm中转服务器}"
         echo -e "${CYAN}│${NC}                                                            ${CYAN}│${NC}"
         echo -ne "${CYAN}│${NC}  快捷命令名称（1-3字符）[默认: tp]: "
         read user_cmd
@@ -362,6 +366,7 @@ prompt_config() {
         echo -e "${CYAN}║${NC}  ${BOLD}📋 配置确认${NC}                                                ${CYAN}║${NC}"
         echo -e "${CYAN}╠══════════════════════════════════════════════════════════════╣${NC}"
         echo -e "${CYAN}║${NC}                                                              ${CYAN}║${NC}"
+        printf "${CYAN}║${NC}    服务器名称  ${GREEN}%-46s${NC}${CYAN}║${NC}\n" "${SERVER_NAME}"
         printf "${CYAN}║${NC}    网卡        ${GREEN}%-46s${NC}${CYAN}║${NC}\n" "${INTERFACE}"
         printf "${CYAN}║${NC}    流量比例    ${GREEN}%-46s${NC}${CYAN}║${NC}\n" "1:${TARGET_RATIO}"
         printf "${CYAN}║${NC}    日配额      ${GREEN}%-46s${NC}${CYAN}║${NC}\n" "${DAILY_QUOTA} GB/天"
@@ -669,6 +674,7 @@ generate_config() {
 
     cat > "${CONFIG_DIR}/config.json" << EOF
 {
+    "server_name": "${SERVER_NAME}",
     "interface": "${INTERFACE}",
     "target_ratio": ${TARGET_RATIO},
     "max_daily_extra_gb": ${DAILY_QUOTA},

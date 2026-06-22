@@ -25,11 +25,35 @@ from typing import Dict, List, Optional, Tuple
 
 CONFIG_FILE = "/etc/traffic-padding/config.json"
 USAGE_FILE = "/etc/traffic-padding/usage.json"
+STATS_FILE = "/etc/traffic-padding/stats.json"
 URL_POOL_REFRESH_INTERVAL = 86400
 HTTP_TIMEOUT = 15
 SLIDING_WINDOW_SIZE = 5
 CONFIG_RELOAD_INTERVAL = 300
 TG_CHECK_INTERVAL = 3600
+
+# URL 中文名称映射
+URL_NAME_MAP = {
+    "dldir1.qq.com": "腾讯",
+    "dl.360safe.com": "360",
+    "cdn.aliyundcdntest.com": "阿里云",
+    "huaweicloud.obs": "华为云",
+    "dldir1.163.com": "网易",
+    "lf1-cdn-tos.bytegoofy.com": "字节跳动",
+    "img.alicdn.com": "淘宝",
+    "qiniu-web-assets.dcloud.net.cn": "七牛云",
+    "cloud.tencent.com": "腾讯云",
+    "cn.bing.com": "必应",
+    "bing.com": "必应",
+    "en.wikipedia.org": "维基百科",
+    "wikipedia.org": "维基百科",
+    "speed.cloudflare.com": "Cloudflare",
+    "dl.google.com": "Google",
+    "download.jetbrains.com": "JetBrains",
+    "speed.hetzner.de": "Hetzner",
+    "proof.ovh.net": "OVH",
+    "speedtest.tele2.net": "Tele2",
+}
 
 COUNTER_MAX_32BIT = 0xFFFFFFFF
 COUNTER_MAX_64BIT = 0xFFFFFFFFFFFFFFFF
@@ -410,6 +434,20 @@ class URLPool:
     def get_url_count(self) -> int:
         return len(self.urls)
 
+    @staticmethod
+    def get_url_name(url: str) -> str:
+        """获取 URL 的中文名称"""
+        for domain, name in URL_NAME_MAP.items():
+            if domain in url:
+                return name
+        # 尝试提取域名
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            return parsed.netloc.split('.')[0]
+        except:
+            return "未知来源"
+
 
 # ============================================================================
 # 微任务下载器（HTTP Range 切片）
@@ -668,22 +706,41 @@ class TelegramNotifier(BaseNotifier):
         daily_quota_gb = service.config.get('max_daily_extra_gb', 10)
         url_count = service.url_pool.get_url_count()
         freq_label = self._get_freq_label()
-        monthly_usage_str = self._get_monthly_usage_str(stats['total_downloaded'])
+
+        # 获取周期统计
+        period = service.get_period_stats(self.report_freq)
+        period_str = f"{period['label']}: {period['gb']:.3f} GB"
+
+        # 总用量
+        total_gb = service.total_downloaded_all_time / (1024 ** 3)
+
+        # 月流量
+        monthly_usage_str = ""
+        if self.monthly_quota_gb != 0:
+            monthly_used_gb = stats['total_downloaded'] / (1024 ** 3)
+            if self.monthly_quota_gb == -1:
+                monthly_usage_str = f"\n\n📊 月流量统计\n├ 月总额度: 无限\n└ 已消耗: {monthly_used_gb:.3f} GB"
+            elif self.monthly_quota_gb > 0:
+                monthly_pct = (monthly_used_gb / self.monthly_quota_gb) * 100
+                monthly_usage_str = f"\n\n📊 月额度使用\n├ 月总额度: {self.monthly_quota_gb:.1f} GB\n├ 已消耗: {monthly_used_gb:.3f} GB\n└ 占比: {monthly_pct:.2f}%"
 
         return f"""📋 <b>Traffic Padding {freq_label}</b>
 ━━━━━━━━━━━━━━━━━━━━
 
+🖥️ <b>{service.server_name}</b>
+
 🕐 {now.strftime("%Y-%m-%d %H:%M")}
 
-🖥 服务状态
+📊 用量统计
+├ {period_str}
+├ 累计总量: {total_gb:.3f} GB
+├ 今日配额: {quota_used / (1024**3):.3f} / {daily_quota_gb:.1f} GB{monthly_usage_str}
+
+📈 运行状态
 ├ 周期: {service.cycle_count}
+├ 任务: {stats['task_count']}
 ├ URL: {url_count} 个
 └ 时长: {self._format_uptime(service)}
-
-📈 流量统计
-├ 任务: {stats['task_count']}
-├ 下载: {stats['total_downloaded_mb']:.1f} MB
-└ 配额: {quota_used / (1024**3):.3f} / {daily_quota_gb:.1f} GB{monthly_usage_str}
 
 ⚙️ 配置
 ├ 网卡: {service.config.get('interface')}
@@ -761,6 +818,13 @@ class DingTalkNotifier(BaseNotifier):
         url_count = service.url_pool.get_url_count()
         freq_label = self._get_freq_label()
 
+        # 获取周期统计
+        period = service.get_period_stats(self.report_freq)
+        period_str = f"{period['label']}: {period['gb']:.3f} GB"
+
+        # 总用量
+        total_gb = service.total_downloaded_all_time / (1024 ** 3)
+
         # 钉钉 markdown 格式的月流量字符串
         monthly_usage_str = ""
         if self.monthly_quota_gb != 0:
@@ -775,17 +839,20 @@ class DingTalkNotifier(BaseNotifier):
 
 ---
 
+**🖥️ {service.server_name}**
+
 🕐 **{now.strftime("%Y-%m-%d %H:%M")}**
 
-### 🖥 服务状态
+### 📊 用量统计
+- {period_str}
+- 累计总量: {total_gb:.3f} GB
+- 今日配额: {quota_used / (1024**3):.3f} / {daily_quota_gb:.1f} GB{monthly_usage_str}
+
+### 📈 运行状态
 - 周期: {service.cycle_count}
+- 任务: {stats['task_count']}
 - URL: {url_count} 个
 - 时长: {self._format_uptime(service)}
-
-### 📈 流量统计
-- 任务: {stats['task_count']}
-- 下载: {stats['total_downloaded_mb']:.1f} MB
-- 配额: {quota_used / (1024**3):.3f} / {daily_quota_gb:.1f} GB{monthly_usage_str}
 
 ### ⚙️ 配置
 - 网卡: {service.config.get('interface')}
@@ -883,6 +950,88 @@ class TrafficPaddingService:
         self._cached_traffic_stats = None  # 缓存流量统计
         self.start_time = time.time()  # 记录启动时间
         self.manual_report_requested = False  # 手动推送请求标志
+        self.server_name = config.get('server_name', 'Realm中转服务器')
+
+        # 用量统计
+        self.stats_file = STATS_FILE
+        self.total_downloaded_all_time = 0  # 历史总下载量
+        self.daily_stats = {}  # 每日统计 {date: bytes}
+        self._load_stats()
+
+    def _load_stats(self):
+        """加载历史统计数据"""
+        try:
+            if os.path.exists(self.stats_file):
+                with open(self.stats_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.total_downloaded_all_time = data.get('total_downloaded', 0)
+                    self.daily_stats = data.get('daily_stats', {})
+                    log_message("INFO", f"加载统计数据: 总用量 {self.total_downloaded_all_time / (1024**3):.3f} GB")
+        except (json.JSONDecodeError, IOError):
+            self.total_downloaded_all_time = 0
+            self.daily_stats = {}
+
+    def _save_stats(self):
+        """保存统计数据"""
+        try:
+            os.makedirs(os.path.dirname(self.stats_file), exist_ok=True)
+            # 清理超过 90 天的旧数据
+            cutoff = datetime.now().strftime("%Y-%m-%d")
+            cutoff_ts = datetime.now().timestamp() - 90 * 86400
+            self.daily_stats = {
+                k: v for k, v in self.daily_stats.items()
+                if datetime.strptime(k, "%Y-%m-%d").timestamp() > cutoff_ts
+            }
+            data = {
+                'total_downloaded': self.total_downloaded_all_time,
+                'daily_stats': self.daily_stats
+            }
+            with open(self.stats_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+        except (IOError, OSError):
+            pass
+
+    def record_download(self, bytes_downloaded: int):
+        """记录下载量"""
+        self.total_downloaded_all_time += bytes_downloaded
+        today = datetime.now().strftime("%Y-%m-%d")
+        self.daily_stats[today] = self.daily_stats.get(today, 0) + bytes_downloaded
+        self._save_stats()
+
+    def get_period_stats(self, freq: str) -> dict:
+        """获取指定周期的统计"""
+        now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+
+        if freq == "daily":
+            period_bytes = self.daily_stats.get(today, 0)
+            period_label = "今日"
+        elif freq == "weekly":
+            # 本周（周一到今天）
+            period_bytes = 0
+            for i in range(7):
+                day = (now - __import__('datetime').timedelta(days=i)).strftime("%Y-%m-%d")
+                period_bytes += self.daily_stats.get(day, 0)
+                if (now - __import__('datetime').timedelta(days=i)).weekday() == 0:
+                    break
+            period_label = "本周"
+        elif freq == "monthly":
+            # 本月
+            period_bytes = 0
+            month_prefix = now.strftime("%Y-%m")
+            for k, v in self.daily_stats.items():
+                if k.startswith(month_prefix):
+                    period_bytes += v
+            period_label = "本月"
+        else:
+            period_bytes = 0
+            period_label = "总计"
+
+        return {
+            'bytes': period_bytes,
+            'gb': period_bytes / (1024 ** 3),
+            'label': period_label
+        }
 
     def _send_notification(self, text: str):
         """同时发送到 TG 和钉钉"""
@@ -934,22 +1083,26 @@ class TrafficPaddingService:
                 result = self.downloader.execute_micro_task(url, target_bytes)
                 if result['success']:
                     self.scheduler.record_usage(result['bytes_downloaded'])
-                    log_message("INFO", f"下载 {result['bytes_downloaded'] / (1024*1024):.1f}MB 耗时 {result['duration']:.1f}s")
+                    self.record_download(result['bytes_downloaded'])  # 记录到统计
+                    url_name = self.url_pool.get_url_name(url)
+                    log_message("INFO", f"下载 {result['bytes_downloaded'] / (1024*1024):.1f}MB 耗时 {result['duration']:.1f}s 来源:{url_name}")
 
                     # 首次任务完成时发送数据推送测试消息（仅一次）
                     if not self.first_task_done:
                         self.first_task_done = True
+                        url_name = self.url_pool.get_url_name(url)
                         # 确定推送渠道和频率
                         if self.tg_notifier.enabled:
                             freq_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(self.tg_notifier.report_freq, "报告")
                             self.tg_notifier.send_message(
                                 f"🧪 <b>【数据推送测试消息】</b>\n"
                                 f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                                f"🖥️ {self.server_name}\n\n"
                                 f"✅ 首次下载任务已完成\n\n"
                                 f"📊 任务详情\n"
                                 f"├ 下载量: {result['bytes_downloaded'] / (1024*1024):.1f} MB\n"
                                 f"├ 耗时: {result['duration']:.1f}s\n"
-                                f"└ 来源: {url[:40]}...\n\n"
+                                f"└ 来源: {url_name}\n\n"
                                 f"⚙️ 推送设置\n"
                                 f"├ 频率: {freq_label}\n"
                                 f"└ 状态: 正常运行中\n\n"
@@ -959,11 +1112,12 @@ class TrafficPaddingService:
                             freq_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(self.dingtalk_notifier.report_freq, "报告")
                             self.dingtalk_notifier.send_message(
                                 f"## 🧪 【数据推送测试消息】\n\n---\n\n"
+                                f"**🖥️ {self.server_name}**\n\n"
                                 f"✅ 首次下载任务已完成\n\n"
                                 f"### 📊 任务详情\n"
                                 f"- 下载量: {result['bytes_downloaded'] / (1024*1024):.1f} MB\n"
                                 f"- 耗时: {result['duration']:.1f}s\n"
-                                f"- 来源: {url[:40]}...\n\n"
+                                f"- 来源: {url_name}\n\n"
                                 f"### ⚙️ 推送设置\n"
                                 f"- 频率: {freq_label}\n"
                                 f"- 状态: 正常运行中\n\n"
@@ -1030,7 +1184,8 @@ class TrafficPaddingService:
         verify_status = "✓ 验证通过" if verify_result.get('success') else "✗ 验证失败"
         if self.tg_notifier.enabled:
             self.tg_notifier.send_message(
-                f"🟢 <b>Traffic Padding 已启动</b>\n"
+                f"🟢 <b>Traffic Padding 已启动</b>\n\n"
+                f"🖥️ {self.server_name}\n\n"
                 f"网卡: {self.config.get('interface')}\n"
                 f"比例: 1:{self.config.get('target_ratio')}\n"
                 f"日配额: {self.config.get('max_daily_extra_gb')} GB\n"
@@ -1041,6 +1196,7 @@ class TrafficPaddingService:
         if self.dingtalk_notifier.enabled:
             self.dingtalk_notifier.send_message(
                 f"## 🟢 Traffic Padding 已启动\n\n"
+                f"**🖥️ {self.server_name}**\n\n"
                 f"- 网卡: {self.config.get('interface')}\n"
                 f"- 比例: 1:{self.config.get('target_ratio')}\n"
                 f"- 日配额: {self.config.get('max_daily_extra_gb')} GB\n"
@@ -1058,19 +1214,24 @@ class TrafficPaddingService:
             self.running = False
             # 发送停止通知
             stats = self.downloader.get_stats()
+            total_gb = self.total_downloaded_all_time / (1024 ** 3)
             if self.tg_notifier.enabled:
                 self.tg_notifier.send_message(
-                    f"🔴 <b>Traffic Padding 已停止</b>\n"
+                    f"🔴 <b>Traffic Padding 已停止</b>\n\n"
+                    f"🖥️ {self.server_name}\n\n"
                     f"周期: {self.cycle_count}\n"
-                    f"下载: {stats['total_downloaded_mb']:.1f} MB\n"
-                    f"任务: {stats['task_count']}"
+                    f"任务: {stats['task_count']}\n"
+                    f"本次下载: {stats['total_downloaded_mb']:.1f} MB\n"
+                    f"累计总量: {total_gb:.3f} GB"
                 )
             if self.dingtalk_notifier.enabled:
                 self.dingtalk_notifier.send_message(
                     f"## 🔴 Traffic Padding 已停止\n\n"
+                    f"**🖥️ {self.server_name}**\n\n"
                     f"- 周期: {self.cycle_count}\n"
-                    f"- 下载: {stats['total_downloaded_mb']:.1f} MB\n"
-                    f"- 任务: {stats['task_count']}"
+                    f"- 任务: {stats['task_count']}\n"
+                    f"- 本次下载: {stats['total_downloaded_mb']:.1f} MB\n"
+                    f"- 累计总量: {total_gb:.3f} GB"
                 )
             self._log_stats()
             log_message("INFO", "服务已停止")
