@@ -1106,7 +1106,7 @@ class TrafficPaddingService:
         self._cached_traffic_stats = None  # 缓存流量统计
         self.start_time = time.time()  # 记录启动时间
         self.manual_report_requested = False  # 手动推送请求标志
-        self.server_name = config.get('server_name', 'Realm中转服务器')
+        self.server_name = self.config.get('server_name', 'Realm中转服务器')
 
         # 用量统计
         self.stats_file = STATS_FILE
