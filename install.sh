@@ -451,9 +451,9 @@ CONFIG_DIR="/etc/traffic-padding"
 
 show_header() {
     clear
-    echo -e "${CYAN}+======================================================================+${NC}"
-    echo -e "${CYAN}|${NC}  ${BOLD}Traffic Padding Manager${NC}                                             ${CYAN}|${NC}"
-    echo -e "${CYAN}+======================================================================+${NC}"
+    echo -e "${CYAN}+===========================================================================+${NC}"
+    echo -e "${CYAN}|${NC}  ${BOLD}Traffic Padding Manager${NC}                                                ${CYAN}|${NC}"
+    echo -e "${CYAN}+===========================================================================+${NC}"
     echo ""
 }
 
@@ -481,11 +481,11 @@ t=d.now().strftime('%Y-%m-%d')
 print(f\"今日: {b/1073741824:.3f} GB\" if p.get('date')==t else '今日: 0.000 GB')
 " 2>/dev/null || echo "今日: 读取失败")
 
-    echo -e "${CYAN}+----------------------------------------------------------------------+${NC}"
-    echo -e "${CYAN}|${NC}  状态: ${status}   自启: ${GREEN}${boot}${NC}                                     ${CYAN}|${NC}"
-    echo -e "${CYAN}|${NC}  ${config}                                             ${CYAN}|${NC}"
-    echo -e "${CYAN}|${NC}  ${quota}                                                       ${CYAN}|${NC}"
-    echo -e "${CYAN}+----------------------------------------------------------------------+${NC}"
+    echo -e "${CYAN}+---------------------------------------------------------------------------+${NC}"
+    echo -e "${CYAN}|${NC}  状态: ${status}   自启: ${GREEN}${boot}${NC}                                          ${CYAN}|${NC}"
+    echo -e "${CYAN}|${NC}  ${config}                                                  ${CYAN}|${NC}"
+    echo -e "${CYAN}|${NC}  ${quota}                                                            ${CYAN}|${NC}"
+    echo -e "${CYAN}+---------------------------------------------------------------------------+${NC}"
 }
 
 wait_key() {
@@ -845,22 +845,22 @@ main() {
         show_header
         get_status
         echo ""
-        echo -e "${CYAN}+======================================================================+${NC}"
-        echo -e "${CYAN}|${NC}  ${BOLD}服务控制${NC}                                                             ${CYAN}|${NC}"
-        echo -e "${CYAN}+--------------------------------------+-------------------------------+${NC}"
-        echo -e "${CYAN}|${NC}  ${CYAN}[1]${NC} 查看状态                       ${CYAN}|${NC}  ${CYAN}[5]${NC} 实时日志                   ${CYAN}|${NC}"
-        echo -e "${CYAN}|${NC}  ${CYAN}[2]${NC} 启动服务                       ${CYAN}|${NC}  ${CYAN}[6]${NC} 最近日志                   ${CYAN}|${NC}"
-        echo -e "${CYAN}|${NC}  ${CYAN}[3]${NC} 停止服务                       ${CYAN}|${NC}  ${GREEN}[7]${NC} 手动推送                   ${CYAN}|${NC}"
-        echo -e "${CYAN}|${NC}  ${CYAN}[4]${NC} 重启服务                       ${CYAN}|${NC}  ${CYAN}[8]${NC} 查看配置                   ${CYAN}|${NC}"
-        echo -e "${CYAN}+--------------------------------------+-------------------------------+${NC}"
-        echo -e "${CYAN}|${NC}  ${BOLD}系统管理${NC}                                                             ${CYAN}|${NC}"
-        echo -e "${CYAN}+======================================================================+${NC}"
-        echo -e "${CYAN}|${NC}  ${CYAN}[9]${NC} 编辑配置    ${CYAN}[10]${NC} 开机自启    ${CYAN}[11]${NC} 取消自启                   ${CYAN}|${NC}"
-        echo -e "${CYAN}|${NC}  ${CYAN}[12]${NC} 网卡测试    ${RED}[13]${NC} 卸载        ${GREEN}[14]${NC} 一键更新                   ${CYAN}|${NC}"
-        echo -e "${CYAN}|${NC}  ${YELLOW}[15]${NC} 自动面板: $(get_auto_panel_status)                                              ${CYAN}|${NC}"
-        echo -e "${CYAN}+======================================================================+${NC}"
-        echo -e "${CYAN}|${NC}  ${CYAN}[0]${NC} 退出                                                               ${CYAN}|${NC}"
-        echo -e "${CYAN}+======================================================================+${NC}"
+        echo -e "${CYAN}+===========================================================================+${NC}"
+        echo -e "${CYAN}|${NC}  ${BOLD}服务控制${NC}                                                                ${CYAN}|${NC}"
+        echo -e "${CYAN}+--------------------------------------+------------------------------------+${NC}"
+        echo -e "${CYAN}|${NC}  ${CYAN}[1]${NC} 查看状态                        ${CYAN}|${NC}  ${CYAN}[5]${NC} 实时日志                      ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}  ${CYAN}[2]${NC} 启动服务                        ${CYAN}|${NC}  ${CYAN}[6]${NC} 最近日志                      ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}  ${CYAN}[3]${NC} 停止服务                        ${CYAN}|${NC}  ${GREEN}[7]${NC} 手动推送                      ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}  ${CYAN}[4]${NC} 重启服务                        ${CYAN}|${NC}  ${CYAN}[8]${NC} 查看配置                      ${CYAN}|${NC}"
+        echo -e "${CYAN}+--------------------------------------+------------------------------------+${NC}"
+        echo -e "${CYAN}|${NC}  ${BOLD}系统管理${NC}                                                                ${CYAN}|${NC}"
+        echo -e "${CYAN}+===========================================================================+${NC}"
+        echo -e "${CYAN}|${NC}  ${CYAN}[9]${NC} 编辑配置     ${CYAN}[10]${NC} 开机自启     ${CYAN}[11]${NC} 取消自启                      ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}  ${CYAN}[12]${NC} 网卡测试     ${RED}[13]${NC} 卸载         ${GREEN}[14]${NC} 一键更新                      ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}  ${YELLOW}[15]${NC} 自动面板: $(get_auto_panel_status)                                                   ${CYAN}|${NC}"
+        echo -e "${CYAN}+===========================================================================+${NC}"
+        echo -e "${CYAN}|${NC}  ${CYAN}[0]${NC} 退出                                                                    ${CYAN}|${NC}"
+        echo -e "${CYAN}+===========================================================================+${NC}"
         echo ""
         echo -ne "  请选择 [0-15]: "
         read choice
