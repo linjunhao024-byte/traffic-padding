@@ -601,8 +601,6 @@ do_update() {
     wait_key
 }
 
-do_update
-
 main() {
     while true; do
         show_header
