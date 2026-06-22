@@ -828,7 +828,9 @@ do_update() {
 
     echo -ne "  更新管理脚本..."
     mv /tmp/install.sh.new /tmp/install.sh
-    bash /tmp/install.sh --update-tpm-only 2>/dev/null || true
+    # 获取当前快捷命令名称
+    local current_cmd=$(basename "$0")
+    CMD_NAME="$current_cmd" bash /tmp/install.sh --update-tpm-only 2>/dev/null || true
     echo -e " ${GREEN}✓${NC}"
 
     echo ""
