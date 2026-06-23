@@ -567,10 +567,19 @@ CMD_NAME="$(basename "$0")"
 # 格式化日志行（表格模式）
 format_log_line() {
     local line="$1"
-    # 提取时间（格式：Mon DD HH:MM:SS）
-    local time=$(echo "$line" | grep -oP '[A-Z][a-z]{2} +[0-9]+ +[0-9]+:[0-9]+:[0-9]+' | head -1)
-    # 提取消息内容（去掉时间戳和主机名等前缀）
-    local msg=$(echo "$line" | sed -E 's/^[A-Z][a-z]{2} +[0-9]+ +[0-9]+:[0-9]+:[0-9]+ [^ ]+ [a-z-]+\[[0-9]+\]: //')
+    local time=""
+    local msg=""
+
+    # 判断是否包含时间戳（journalctl 格式）
+    if echo "$line" | grep -qE '^[A-Z][a-z]{2} +[0-9]+ +[0-9]+:[0-9]+:[0-9]+'; then
+        # 有时间戳：提取时间和消息
+        time=$(echo "$line" | grep -oE '[0-9]+:[0-9]+:[0-9]+' | head -1)
+        msg=$(echo "$line" | sed -E 's/^[A-Z][a-z]{2} +[0-9]+ +[0-9]+:[0-9]+:[0-9]+ [^ ]+ [a-z-]+\[[0-9]+\]: //')
+    else
+        # 无时间戳（-o cat 模式）：使用当前时间
+        time=$(date '+%H:%M:%S')
+        msg="$line"
+    fi
 
     # 根据消息类型设置颜色
     local color="${NC}"
@@ -583,8 +592,8 @@ format_log_line() {
     fi
 
     # 输出格式化行
-    if [[ -n "$time" && -n "$msg" ]]; then
-        printf "  ${CYAN}│${NC}  %-14s ${color}%-60s${NC} ${CYAN}│${NC}\n" "$time" "$msg"
+    if [[ -n "$msg" ]]; then
+        printf "  ${CYAN}│${NC}  %-10s ${color}%-58s${NC} ${CYAN}│${NC}\n" "$time" "$msg"
     fi
 }
 
