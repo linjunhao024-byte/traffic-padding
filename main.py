@@ -10,6 +10,7 @@ import base64
 import json
 import os
 import random
+import re
 import signal
 import struct
 import sys
@@ -26,11 +27,13 @@ from typing import Dict, List, Optional, Tuple
 CONFIG_FILE = "/etc/traffic-padding/config.json"
 USAGE_FILE = "/etc/traffic-padding/usage.json"
 STATS_FILE = "/etc/traffic-padding/stats.json"
+QOS_STATS_FILE = "/etc/traffic-padding/qos_stats.json"
 URL_POOL_REFRESH_INTERVAL = 86400
 HTTP_TIMEOUT = 15
 SLIDING_WINDOW_SIZE = 5
 CONFIG_RELOAD_INTERVAL = 300
 TG_CHECK_INTERVAL = 3600
+QOS_CHECK_INTERVAL = 600  # QoS 检测间隔（秒）
 
 # URL 中文名称映射
 URL_NAME_MAP = {
@@ -239,6 +242,248 @@ class TrafficMonitor:
             'rx_rate': rx_delta / time_delta, 'tx_rate': tx_delta / time_delta,
             'need_padding': False
         }
+
+
+# ============================================================================
+# QoS 探测（HTTP 方式，安全隐蔽）
+# ============================================================================
+
+class QoSProbe:
+    """跨境网络 QoS 探测器（HTTP 方式）"""
+
+    def __init__(self, config: Config):
+        self.config = config
+        self.enabled = config.get('qos_probe_enabled', True)
+        self.probe_targets = config.get('qos_probe_targets', [
+            'http://www.google.co.jp',   # 日本 Google
+            'http://www.yahoo.co.jp',    # 日本雅虎
+            'http://www.amazon.co.jp',   # 日本亚马逊
+        ])
+        self.probe_count = config.get('qos_probe_count', 5)  # 每次探测的请求次数
+        self.history_file = QOS_STATS_FILE
+        self.history: List[Dict] = []
+        self._load_history()
+
+        # QoS 阈值（针对日本线路）
+        self.latency_threshold = 100      # 延迟阈值 (ms)
+        self.jitter_threshold = 30        # 抖动阈值 (ms)
+        self.loss_threshold = 5           # 丢包阈值 (%)
+
+    def _load_history(self):
+        """加载历史探测数据"""
+        try:
+            if os.path.exists(self.history_file):
+                with open(self.history_file, 'r', encoding='utf-8') as f:
+                    self.history = json.load(f)
+                    # 只保留最近 7 天的数据
+                    cutoff = time.time() - 7 * 86400
+                    self.history = [h for h in self.history if h.get('timestamp', 0) > cutoff]
+        except (json.JSONDecodeError, IOError):
+            self.history = []
+
+    def _save_history(self):
+        """保存探测历史"""
+        try:
+            os.makedirs(os.path.dirname(self.history_file), exist_ok=True)
+            # 只保留最近 1000 条记录
+            if len(self.history) > 1000:
+                self.history = self.history[-1000:]
+            with open(self.history_file, 'w', encoding='utf-8') as f:
+                json.dump(self.history, f, indent=2)
+        except (IOError, OSError):
+            pass
+
+    def probe_single(self, url: str) -> Dict:
+        """对单个目标进行 HTTP 探测"""
+        result = {
+            'target': url,
+            'success': False,
+            'latency': 0,
+            'status_code': 0,
+        }
+
+        try:
+            # 随机 User-Agent
+            ua = random.choice(USER_AGENTS)
+            headers = {'User-Agent': ua}
+
+            start = time.time()
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=5, context=SSL_CONTEXT) as resp:
+                latency = (time.time() - start) * 1000  # ms
+                result['latency'] = latency
+                result['status_code'] = resp.status
+                result['success'] = True
+
+        except urllib.error.HTTPError as e:
+            # HTTP 错误也算成功（能连接上）
+            result['latency'] = (time.time() - start) * 1000 if 'start' in dir() else 0
+            result['status_code'] = e.code
+            result['success'] = True  # 能收到 HTTP 响应说明网络通
+        except Exception as e:
+            result['latency'] = -1
+            result['success'] = False
+
+        return result
+
+    def probe_all(self) -> Dict:
+        """对所有目标进行探测"""
+        if not self.enabled:
+            return {'enabled': False}
+
+        # 随机打乱目标顺序
+        targets = self.probe_targets.copy()
+        random.shuffle(targets)
+
+        # 只探测随机 2-3 个目标（减少特征）
+        probe_count = min(random.randint(2, 3), len(targets))
+        selected_targets = targets[:probe_count]
+
+        results = []
+        for target in selected_targets:
+            # 随机延迟 0.5-2 秒（避免规律性）
+            time.sleep(random.uniform(0.5, 2.0))
+
+            result = self.probe_single(target)
+            results.append(result)
+
+            # 多次测量同一目标
+            if self.probe_count > 1:
+                for _ in range(self.probe_count - 1):
+                    time.sleep(random.uniform(0.3, 1.0))
+                    r = self.probe_single(target)
+                    if r['success']:
+                        results.append(r)
+
+        # 汇总结果
+        successful = [r for r in results if r['success']]
+        if not successful:
+            return {
+                'enabled': True,
+                'timestamp': time.time(),
+                'status': 'error',
+                'message': '所有探测目标不可达',
+                'latency_avg': 0,
+                'latency_min': 0,
+                'latency_max': 0,
+                'jitter': 0,
+                'loss': 100,
+            }
+
+        # 计算统计
+        latencies = [r['latency'] for r in successful]
+        avg_latency = sum(latencies) / len(latencies)
+        min_latency = min(latencies)
+        max_latency = max(latencies)
+
+        # 计算抖动（标准差）
+        if len(latencies) > 1:
+            variance = sum((l - avg_latency) ** 2 for l in latencies) / len(latencies)
+            jitter = variance ** 0.5
+        else:
+            jitter = 0
+
+        # 丢包率
+        total_requests = len(results)
+        failed_requests = total_requests - len(successful)
+        loss = (failed_requests / total_requests) * 100 if total_requests > 0 else 0
+
+        # 判断 QoS 状态
+        qos_level = 'good'  # good, warning, bad
+        qos_reasons = []
+
+        if avg_latency > self.latency_threshold:
+            qos_level = 'warning'
+            qos_reasons.append(f'延迟高 ({avg_latency:.0f}ms)')
+
+        if jitter > self.jitter_threshold:
+            qos_level = 'warning'
+            qos_reasons.append(f'抖动大 ({jitter:.0f}ms)')
+
+        if loss > self.loss_threshold:
+            qos_level = 'bad'
+            qos_reasons.append(f'丢包严重 ({loss:.0f}%)')
+
+        if avg_latency > self.latency_threshold * 2 or loss > self.loss_threshold * 2:
+            qos_level = 'bad'
+
+        # 与历史数据对比
+        if len(self.history) >= 5:
+            recent_avg_latency = sum(h.get('latency_avg', 0) for h in self.history[-5:]) / 5
+            if avg_latency > recent_avg_latency * 1.5 and avg_latency > 80:
+                if qos_level == 'good':
+                    qos_level = 'warning'
+                qos_reasons.append(f'延迟比平时高 {(avg_latency/recent_avg_latency-1)*100:.0f}%')
+
+        # 保存结果
+        result_data = {
+            'timestamp': time.time(),
+            'latency_avg': avg_latency,
+            'latency_min': min_latency,
+            'latency_max': max_latency,
+            'jitter': jitter,
+            'loss': loss,
+            'qos_level': qos_level,
+            'qos_reasons': qos_reasons,
+            'probe_count': len(successful),
+        }
+
+        self.history.append(result_data)
+        self._save_history()
+
+        return {
+            'enabled': True,
+            'status': qos_level,
+            'latency_avg': avg_latency,
+            'latency_min': min_latency,
+            'latency_max': max_latency,
+            'jitter': jitter,
+            'loss': loss,
+            'qos_reasons': qos_reasons,
+            'probe_count': len(successful),
+        }
+
+    def get_status_str(self) -> str:
+        """获取 QoS 状态字符串"""
+        if not self.enabled:
+            return "未启用"
+
+        if not self.history:
+            return "未探测"
+
+        latest = self.history[-1]
+        level = latest.get('qos_level', 'unknown')
+
+        if level == 'good':
+            return f"✓ 正常 ({latest.get('latency_avg', 0):.0f}ms)"
+        elif level == 'warning':
+            return f"⚠ 轻度拥堵 ({latest.get('latency_avg', 0):.0f}ms)"
+        else:
+            return f"✗ 严重拥堵 ({latest.get('latency_avg', 0):.0f}ms)"
+
+    def get_trend(self) -> str:
+        """获取趋势（最近 1 小时 vs 之前）"""
+        if len(self.history) < 5:
+            return "数据不足"
+
+        now = time.time()
+        hour_ago = now - 3600
+
+        recent = [h for h in self.history if h.get('timestamp', 0) > hour_ago]
+        older = [h for h in self.history if h.get('timestamp', 0) <= hour_ago]
+
+        if not recent or not older:
+            return "数据不足"
+
+        recent_avg = sum(h.get('latency_avg', 0) for h in recent) / len(recent)
+        older_avg = sum(h.get('latency_avg', 0) for h in older[-10:]) / min(len(older), 10)
+
+        if recent_avg < older_avg * 0.9:
+            return "↓ 改善中"
+        elif recent_avg > older_avg * 1.1:
+            return "↑ 恶化中"
+        else:
+            return "→ 稳定"
 
 
 # ============================================================================
@@ -802,10 +1047,6 @@ class TelegramNotifier(BaseNotifier):
             else:
                 error_str = error_str.replace("├", "└", 1)
 
-        # 配额预测
-        days_remaining = service.estimate_days_remaining()
-        days_str = f"{days_remaining} 天后" if days_remaining > 0 else "数据不足"
-
         # 网卡流量对比
         net_stats = service.get_network_stats()
         fill_ratio = 0
@@ -818,6 +1059,21 @@ class TelegramNotifier(BaseNotifier):
             healthy = sum(1 for h in service.url_pool.url_health.values()
                          if h['success'] / max(1, h['success'] + h['fail']) > 0.8)
             url_health_str = f"\n├ 健康: {healthy}/{url_count}"
+
+        # QoS 状态
+        qos_str = ""
+        if service.qos_probe.enabled:
+            qos_status = service.qos_probe.get_status_str()
+            qos_trend = service.qos_probe.get_trend()
+            qos_result = service._cached_qos_result or {}
+            qos_str = f"""
+
+🌐 QoS 探测
+├ 状态: {qos_status}
+├ 趋势: {qos_trend}
+├ 延迟: {qos_result.get('latency_avg', 0):.0f}ms
+├ 抖动: {qos_result.get('jitter', 0):.0f}ms
+└ 丢包: {qos_result.get('loss', 0):.0f}%"""
 
         return f"""📋 <b>Traffic Padding {freq_label}</b>
 ━━━━━━━━━━━━━━━━━━━━
@@ -845,7 +1101,7 @@ class TelegramNotifier(BaseNotifier):
 🔗 URL 状态
 ├ 总数: {url_count} 个{url_health_str}
 ├ 成功: {stats['success_count']} 次
-└ 失败: {stats['fail_count']} 次{error_str}
+└ 失败: {stats['fail_count']} 次{error_str}{qos_str}
 
 📈 运行状态
 ├ 周期: {service.cycle_count}
@@ -959,10 +1215,6 @@ class DingTalkNotifier(BaseNotifier):
             if len(error_stats) > 3:
                 error_str += f"\n- ...共 {len(error_stats)} 种错误"
 
-        # 配额预测
-        days_remaining = service.estimate_days_remaining()
-        days_str = f"{days_remaining} 天后" if days_remaining > 0 else "数据不足"
-
         # 网卡流量对比
         net_stats = service.get_network_stats()
         fill_ratio = 0
@@ -975,6 +1227,21 @@ class DingTalkNotifier(BaseNotifier):
             healthy = sum(1 for h in service.url_pool.url_health.values()
                          if h['success'] / max(1, h['success'] + h['fail']) > 0.8)
             url_health_str = f"\n- 健康: {healthy}/{url_count}"
+
+        # QoS 状态
+        qos_str = ""
+        if service.qos_probe.enabled:
+            qos_status = service.qos_probe.get_status_str()
+            qos_trend = service.qos_probe.get_trend()
+            qos_result = service._cached_qos_result or {}
+            qos_str = f"""
+
+### 🌐 QoS 探测
+- 状态: {qos_status}
+- 趋势: {qos_trend}
+- 延迟: {qos_result.get('latency_avg', 0):.0f}ms
+- 抖动: {qos_result.get('jitter', 0):.0f}ms
+- 丢包: {qos_result.get('loss', 0):.0f}%"""
 
         return f"""## 📋 Traffic Padding {freq_label}
 
@@ -1003,7 +1270,7 @@ class DingTalkNotifier(BaseNotifier):
 ### 🔗 URL 状态
 - 总数: {url_count} 个{url_health_str}
 - 成功: {stats['success_count']} 次
-- 失败: {stats['fail_count']} 次{error_str}
+- 失败: {stats['fail_count']} 次{error_str}{qos_str}
 
 ### 📈 运行状态
 - 周期: {service.cycle_count}
@@ -1099,9 +1366,11 @@ class TrafficPaddingService:
         self.scheduler = Scheduler(self.config)
         self.tg_notifier = TelegramNotifier(self.config)
         self.dingtalk_notifier = DingTalkNotifier(self.config)
+        self.qos_probe = QoSProbe(self.config)  # QoS 探测器
         self.running = False
         self.cycle_count = 0
         self.last_tg_check = 0
+        self.last_qos_check = 0
         self.first_task_done = False  # 首次任务完成标志
         self._cached_traffic_stats = None  # 缓存流量统计
         self.start_time = time.time()  # 记录启动时间
@@ -1118,6 +1387,9 @@ class TrafficPaddingService:
         self.start_rx_bytes = 0
         self.start_tx_bytes = 0
         self._init_network_baseline()
+
+        # QoS 探测结果缓存
+        self._cached_qos_result = None
 
     def _init_network_baseline(self):
         """初始化网卡流量基准"""
@@ -1383,7 +1655,63 @@ class TrafficPaddingService:
             self.tg_notifier.check_and_send(self)
             self.dingtalk_notifier.check_and_send(self)
 
+        # QoS 定期探测（随机间隔 15-30 分钟）
+        qos_interval = random.randint(900, 1800)  # 15-30 分钟
+        if now - self.last_qos_check >= qos_interval:
+            self.last_qos_check = now
+            if self.qos_probe.enabled:
+                log_message("INFO", "执行 QoS 探测...")
+                self._cached_qos_result = self.qos_probe.probe_all()
+                status = self._cached_qos_result.get('status', 'unknown')
+                latency = self._cached_qos_result.get('latency_avg', 0)
+                loss = self._cached_qos_result.get('loss', 0)
+                log_message("INFO", f"QoS 状态: {status} | 延迟: {latency:.0f}ms | 丢包: {loss:.0f}%")
+
+                # 如果检测到严重 QoS，发送告警
+                if status == 'bad' and self.qos_probe.history:
+                    last_status = self.qos_probe.history[-2].get('qos_level', 'good') if len(self.qos_probe.history) > 1 else 'good'
+                    if last_status != 'bad':
+                        self._send_qos_alert()
+
         time.sleep(self.scheduler.calculate_jitter_sleep())
+
+    def _send_qos_alert(self):
+        """发送 QoS 告警"""
+        result = self._cached_qos_result
+        if not result:
+            return
+
+        reasons = result.get('qos_reasons', [])
+        reasons_str = '\n'.join([f"- {r}" for r in reasons])
+
+        if self.tg_notifier.enabled:
+            self.tg_notifier.send_message(
+                f"⚠️ <b>【QoS 告警】</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"🖥️ {self.server_name}\n\n"
+                f"检测到跨境网络拥堵：\n\n"
+                f"📊 网络状态\n"
+                f"├ 延迟: {result.get('latency_avg', 0):.0f}ms\n"
+                f"├ 抖动: {result.get('jitter', 0):.0f}ms\n"
+                f"└ 丢包: {result.get('loss', 0):.0f}%\n\n"
+                f"⚠️ 原因\n{reasons_str}\n\n"
+                f"💡 晚高峰期间属正常现象，通常在 23:00 后恢复。"
+            )
+
+        if self.dingtalk_notifier.enabled:
+            self.dingtalk_notifier.send_message(
+                f"## ⚠️ 【QoS 告警】\n\n---\n\n"
+                f"**🖥️ {self.server_name}**\n\n"
+                f"检测到跨境网络拥堵：\n\n"
+                f"### 📊 网络状态\n"
+                f"- 延迟: {result.get('latency_avg', 0):.0f}ms\n"
+                f"- 抖动: {result.get('jitter', 0):.0f}ms\n"
+                f"- 丢包: {result.get('loss', 0):.0f}%\n\n"
+                f"### ⚠️ 原因\n{reasons_str}\n\n"
+                f"> 💡 晚高峰期间属正常现象，通常在 23:00 后恢复。"
+            )
+
+        log_message("WARN", "已发送 QoS 告警")
 
     def run(self):
         log_message("INFO", "=" * 50)

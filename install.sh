@@ -1026,7 +1026,10 @@ generate_config() {
     "dingtalk_secret": "${DINGTALK_SECRET}",
     "dingtalk_report_freq": "${DINGTALK_REPORT_FREQ}",
     "dingtalk_report_hour": ${DINGTALK_REPORT_HOUR},
-    "dingtalk_monthly_reset_day": ${DINGTALK_MONTHLY_RESET_DAY}
+    "dingtalk_monthly_reset_day": ${DINGTALK_MONTHLY_RESET_DAY},
+    "qos_probe_enabled": true,
+    "qos_probe_targets": ["http://www.google.co.jp", "http://www.yahoo.co.jp", "http://www.amazon.co.jp"],
+    "qos_probe_count": 5
 }
 EOF
     echo -e "${CYAN}|${NC}  ${GREEN}[✓]${NC} 配置: ${CONFIG_DIR}/config.json                               ${CYAN}|${NC}"

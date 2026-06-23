@@ -186,7 +186,14 @@ Traffic-Tadding/                   /opt/traffic-padding/
     "dingtalk_secret": "",            // 钉钉加签密钥（可选）
     "dingtalk_report_freq": "daily",  // 报告频率: daily/weekly/monthly
     "dingtalk_report_hour": 23,       // 推送时间 (24小时制)
-    "dingtalk_monthly_reset_day": 1   // 月额度重置日（月报用）
+    "dingtalk_monthly_reset_day": 1,  // 月额度重置日（月报用）
+    "qos_probe_enabled": true,        // 启用 QoS 探测
+    "qos_probe_targets": [            // 探测目标（日本网站）
+        "http://www.google.co.jp",   // 日本 Google
+        "http://www.yahoo.co.jp",    // 日本雅虎
+        "http://www.amazon.co.jp"    // 日本亚马逊
+    ],
+    "qos_probe_count": 5              // 每次探测的请求次数
 }
 ```
 
@@ -288,6 +295,7 @@ Traffic-Tadding/                   /opt/traffic-padding/
 | 流量对比 | 显示实际流量 vs 填充流量占比 |
 | 配额预测 | 预估配额用完时间 |
 | 手动推送 | 管理菜单一键推送当前状态 |
+| QoS 探测 | 检测跨境网络拥堵，自动告警 |
 
 ---
 
