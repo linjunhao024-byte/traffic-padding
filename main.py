@@ -10,7 +10,6 @@ import base64
 import json
 import os
 import random
-import re
 import signal
 import struct
 import sys
@@ -304,6 +303,7 @@ class QoSProbe:
             'status_code': 0,
         }
 
+        start = None
         try:
             # 随机 User-Agent
             ua = random.choice(USER_AGENTS)
@@ -319,7 +319,8 @@ class QoSProbe:
 
         except urllib.error.HTTPError as e:
             # HTTP 错误也算成功（能连接上）
-            result['latency'] = (time.time() - start) * 1000 if 'start' in dir() else 0
+            if start is not None:
+                result['latency'] = (time.time() - start) * 1000
             result['status_code'] = e.code
             result['success'] = True  # 能收到 HTTP 响应说明网络通
         except Exception as e:
@@ -692,7 +693,7 @@ class URLPool:
             from urllib.parse import urlparse
             parsed = urlparse(url)
             return parsed.netloc.split('.')[0]
-        except:
+        except Exception:
             return "未知来源"
 
 
@@ -921,6 +922,7 @@ class BaseNotifier:
     def __init__(self):
         self.report_freq = 'daily'
         self.report_hour = 23  # 推送时间（24小时制）
+        self.report_align = 'natural'  # 统计周期对齐方式: natural=自然日/周/月, push_time=按推送时间
         self.monthly_reset_day = 1
         self.monthly_quota_gb = 0
         self.last_report_date = ""
@@ -931,9 +933,11 @@ class BaseNotifier:
         today = now.strftime("%Y-%m-%d")
         current_hour = now.hour
 
-        # 只在指定时间附近（±30分钟）检查是否需要发送
-        if abs(current_hour - self.report_hour) > 0 and current_hour != self.report_hour:
-            return False
+        # 只在推送时间的整点检查（允许 ±30 分钟窗口）
+        if current_hour != self.report_hour:
+            # 检查是否在 report_hour:00 到 report_hour:59 之间
+            if not (current_hour == self.report_hour and now.minute < 60):
+                return False
 
         if today == self.last_report_date:
             return False
@@ -952,6 +956,51 @@ class BaseNotifier:
                     return True
             return False
         return False
+
+    def _get_period_start_time(self, freq: str) -> datetime:
+        """获取统计周期的开始时间"""
+        now = datetime.now()
+
+        if self.report_align == 'push_time':
+            # 按推送时间对齐
+            if freq == 'daily':
+                # 从今天 report_hour:00 开始
+                start = now.replace(hour=self.report_hour, minute=0, second=0, microsecond=0)
+                if now < start:
+                    # 如果当前时间还没到推送时间，从昨天的推送时间开始
+                    start = start - timedelta(days=1)
+                return start
+            elif freq == 'weekly':
+                # 从本周的推送时间开始
+                start = now.replace(hour=self.report_hour, minute=0, second=0, microsecond=0)
+                # 找到本周的推送日（周一）
+                days_since_monday = now.weekday()
+                start = start - timedelta(days=days_since_monday)
+                if now < start:
+                    start = start - timedelta(weeks=1)
+                return start
+            elif freq == 'monthly':
+                # 从本月的推送时间开始
+                start = now.replace(day=1, hour=self.report_hour, minute=0, second=0, microsecond=0)
+                if now < start:
+                    # 如果当前时间还没到推送时间，从上个月开始
+                    if start.month == 1:
+                        start = start.replace(year=start.year - 1, month=12)
+                    else:
+                        start = start.replace(month=start.month - 1)
+                return start
+        else:
+            # 自然日/周/月
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            if freq == 'daily':
+                return today_start
+            elif freq == 'weekly':
+                monday = today_start - timedelta(days=today_start.weekday())
+                return monday
+            elif freq == 'monthly':
+                return today_start.replace(day=1)
+
+        return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     def _format_uptime(self, service: 'TrafficPaddingService') -> str:
         """格式化运行时长"""
@@ -992,6 +1041,7 @@ class TelegramNotifier(BaseNotifier):
         self.chat_id = config.get('tg_chat_id', '')
         self.report_freq = config.get('tg_report_freq', 'daily')
         self.report_hour = config.get('tg_report_hour', 23)
+        self.report_align = config.get('tg_report_align', 'natural')
         self.monthly_reset_day = config.get('tg_monthly_reset_day', 1)
         self.monthly_quota_gb = config.get('monthly_quota_gb', 0)
 
@@ -1140,6 +1190,7 @@ class DingTalkNotifier(BaseNotifier):
         self.secret = config.get('dingtalk_secret', '')
         self.report_freq = config.get('dingtalk_report_freq', 'daily')
         self.report_hour = config.get('dingtalk_report_hour', 23)
+        self.report_align = config.get('dingtalk_report_align', 'natural')
         self.monthly_reset_day = config.get('dingtalk_monthly_reset_day', 1)
         self.monthly_quota_gb = config.get('monthly_quota_gb', 0)
 
@@ -1190,7 +1241,7 @@ class DingTalkNotifier(BaseNotifier):
     def _draw_traffic_chart(self, service: 'TrafficPaddingService') -> str:
         """生成流量柱状图"""
         # 获取流量统计
-        summary = service.get_traffic_summary(self.report_freq)
+        summary = service.get_traffic_summary(self.report_freq, self.report_align, self.report_hour)
         if not summary or (summary['rx_mb'] == 0 and summary['tx_mb'] == 0 and summary['download_mb'] == 0):
             return ""
 
@@ -1484,29 +1535,58 @@ class TrafficPaddingService:
         self.traffic_history.append(snapshot)
         self._save_traffic_history()
 
-    def get_traffic_summary(self, period: str) -> Dict:
+    def get_traffic_summary(self, period: str, report_align: str = 'natural', report_hour: int = 23) -> Dict:
         """获取指定时间段的流量汇总"""
         now = datetime.now()
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        start = None  # 初始化 start 变量
 
-        if period == 'daily':
-            # 今日 00:00 到现在
-            start_time = today_start.timestamp()
-            label = f"{now.strftime('%m月%d日')}"
-        elif period == 'weekly':
-            # 本周一 00:00 到现在
-            monday = today_start - timedelta(days=today_start.weekday())
-            start_time = monday.timestamp()
-            label = f"本周 ({monday.strftime('%m/%d')}-{now.strftime('%m/%d')})"
-        elif period == 'monthly':
-            # 本月1号 00:00 到现在
-            month_start = today_start.replace(day=1)
-            start_time = month_start.timestamp()
-            label = f"{now.strftime('%Y年%m月')}"
-        else:  # total
+        if period == 'total':
             # 从最早记录开始
             start_time = 0
             label = "启用至今"
+        else:
+            # 根据对齐方式计算开始时间
+            if report_align == 'push_time':
+                # 按推送时间对齐
+                if period == 'daily':
+                    start = now.replace(hour=report_hour, minute=0, second=0, microsecond=0)
+                    if now < start:
+                        start = start - timedelta(days=1)
+                    label = f"{start.strftime('%m月%d日 %H:%M')} - {now.strftime('%m月%d日 %H:%M')}"
+                elif period == 'weekly':
+                    start = now.replace(hour=report_hour, minute=0, second=0, microsecond=0)
+                    days_since_monday = now.weekday()
+                    start = start - timedelta(days=days_since_monday)
+                    if now < start:
+                        start = start - timedelta(weeks=1)
+                    label = f"本周 ({start.strftime('%m/%d %H:%M')} - {now.strftime('%m/%d %H:%M')})"
+                elif period == 'monthly':
+                    start = now.replace(day=1, hour=report_hour, minute=0, second=0, microsecond=0)
+                    if now < start:
+                        if start.month == 1:
+                            start = start.replace(year=start.year - 1, month=12)
+                        else:
+                            start = start.replace(month=start.month - 1)
+                    label = f"{now.strftime('%Y年%m月')} ({start.strftime('%m/%d %H:%M')} -)"
+            else:
+                # 自然日/周/月
+                today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                if period == 'daily':
+                    start = today_start
+                    label = f"{now.strftime('%m月%d日')}"
+                elif period == 'weekly':
+                    start = today_start - timedelta(days=today_start.weekday())
+                    label = f"本周 ({start.strftime('%m/%d')}-{now.strftime('%m/%d')})"
+                elif period == 'monthly':
+                    start = today_start.replace(day=1)
+                    label = f"{now.strftime('%Y年%m月')}"
+
+            # 如果 start 未被赋值（未知的 period），使用当前时间
+            if start is None:
+                start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                label = "未知周期"
+
+            start_time = start.timestamp()
 
         # 过滤指定时间段的数据
         period_data = [h for h in self.traffic_history if h.get('timestamp', 0) >= start_time]

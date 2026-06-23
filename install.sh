@@ -259,6 +259,20 @@ prompt_config() {
                     echo -ne "${CYAN}|${NC}  每日推送时间 [默认: 23]: "
                     read report_hour
                     TG_REPORT_HOUR="${report_hour:-23}"
+
+                    # 统计周期对齐选项
+                    echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}  统计周期对齐方式:                                           ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}    ${CYAN}(1)${NC} 自然日/周/月（00:00 开始）${GREEN}← 默认${NC}                   ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}    ${CYAN}(2)${NC} 按推送时间（如 23:00-23:00）                       ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}  ${YELLOW}💡 如果选择按推送时间，日报将统计从今天${TG_REPORT_HOUR}:00到明天${TG_REPORT_HOUR}:00${NC}  ${CYAN}|${NC}"
+                    echo -ne "${CYAN}|${NC}  选择 [默认: 1]: "
+                    read align_choice
+                    case "${align_choice}" in
+                        2) TG_REPORT_ALIGN="push_time" ;;
+                        *) TG_REPORT_ALIGN="natural" ;;
+                    esac
                 fi
             else
                 NOTIFY_TYPE="dingtalk"
@@ -279,9 +293,11 @@ prompt_config() {
                     local dt_url="$DINGTALK_WEBHOOK"
                     if [[ -n "$DINGTALK_SECRET" ]]; then
                         local timestamp=$(($(date +%s) * 1000))
-                        local string_to_sign="${timestamp}\n${DINGTALK_SECRET}"
+                        # 使用 $'\n' 插入真正的换行符
+                        local string_to_sign="${timestamp}"$'\n'"${DINGTALK_SECRET}"
                         local sign=$(printf '%s' "$string_to_sign" | openssl dgst -sha256 -hmac "$DINGTALK_SECRET" -binary | base64 -w 0)
-                        local sign_encoded=$(python3 -c "import urllib.parse; print(urllib.parse.quote_plus('$sign'))" 2>/dev/null || echo "$sign")
+                        # 使用环境变量传递，避免命令注入
+                        local sign_encoded=$(SIGN="$sign" python3 -c "import urllib.parse,os; print(urllib.parse.quote_plus(os.environ['SIGN']))" 2>/dev/null || echo "$sign")
                         dt_url="${dt_url}&timestamp=${timestamp}&sign=${sign_encoded}"
                     fi
 
@@ -330,6 +346,20 @@ prompt_config() {
                     echo -ne "${CYAN}|${NC}  每日推送时间 [默认: 23]: "
                     read report_hour
                     DINGTALK_REPORT_HOUR="${report_hour:-23}"
+
+                    # 统计周期对齐选项
+                    echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}  统计周期对齐方式:                                           ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}    ${CYAN}(1)${NC} 自然日/周/月（00:00 开始）${GREEN}← 默认${NC}                   ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}    ${CYAN}(2)${NC} 按推送时间（如 23:00-23:00）                       ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}  ${YELLOW}💡 如果选择按推送时间，日报将统计从今天${DINGTALK_REPORT_HOUR}:00到明天${DINGTALK_REPORT_HOUR}:00${NC}  ${CYAN}|${NC}"
+                    echo -ne "${CYAN}|${NC}  选择 [默认: 1]: "
+                    read align_choice
+                    case "${align_choice}" in
+                        2) DINGTALK_REPORT_ALIGN="push_time" ;;
+                        *) DINGTALK_REPORT_ALIGN="natural" ;;
+                    esac
                 fi
             fi
 
@@ -824,24 +854,61 @@ def load_history():
     except:
         return []
 
+def load_config():
+    try:
+        with open(os.path.join(CONFIG_DIR, "config.json"), 'r') as f:
+            return json.load(f)
+    except:
+        return {}
+
 def get_period_summary(history, period):
     now = datetime.now()
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    config = load_config()
 
-    if period == 'daily':
-        start_time = today_start.timestamp()
-        label = now.strftime('%m月%d日')
-    elif period == 'weekly':
-        monday = today_start - timedelta(days=today_start.weekday())
-        start_time = monday.timestamp()
-        label = f"本周 ({monday.strftime('%m/%d')}-{now.strftime('%m/%d')})"
-    elif period == 'monthly':
-        month_start = today_start.replace(day=1)
-        start_time = month_start.timestamp()
-        label = now.strftime('%Y年%m月')
-    else:
+    # 获取推送时间和对齐方式
+    report_hour = config.get('dingtalk_report_hour', config.get('tg_report_hour', 23))
+    report_align = config.get('dingtalk_report_align', config.get('tg_report_align', 'natural'))
+
+    if period == 'total':
         start_time = 0
         label = "启用至今"
+    else:
+        if report_align == 'push_time':
+            # 按推送时间对齐
+            if period == 'daily':
+                start = now.replace(hour=report_hour, minute=0, second=0, microsecond=0)
+                if now < start:
+                    start = start - timedelta(days=1)
+                label = f"{start.strftime('%m月%d日 %H:%M')} - {now.strftime('%m月%d日 %H:%M')}"
+            elif period == 'weekly':
+                start = now.replace(hour=report_hour, minute=0, second=0, microsecond=0)
+                days_since_monday = now.weekday()
+                start = start - timedelta(days=days_since_monday)
+                if now < start:
+                    start = start - timedelta(weeks=1)
+                label = f"本周 ({start.strftime('%m/%d %H:%M')} - {now.strftime('%m/%d %H:%M')})"
+            elif period == 'monthly':
+                start = now.replace(day=1, hour=report_hour, minute=0, second=0, microsecond=0)
+                if now < start:
+                    if start.month == 1:
+                        start = start.replace(year=start.year - 1, month=12)
+                    else:
+                        start = start.replace(month=start.month - 1)
+                label = f"{now.strftime('%Y年%m月')} ({start.strftime('%m/%d %H:%M')} -)"
+        else:
+            # 自然日/周/月
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            if period == 'daily':
+                start = today_start
+                label = now.strftime('%m月%d日')
+            elif period == 'weekly':
+                start = today_start - timedelta(days=today_start.weekday())
+                label = f"本周 ({start.strftime('%m/%d')}-{now.strftime('%m/%d')})"
+            elif period == 'monthly':
+                start = today_start.replace(day=1)
+                label = now.strftime('%Y年%m月')
+
+        start_time = start.timestamp()
 
     period_data = [h for h in history if h.get('timestamp', 0) >= start_time]
 
@@ -1158,12 +1225,14 @@ generate_config() {
     "tg_chat_id": "${TG_CHAT_ID}",
     "tg_report_freq": "${TG_REPORT_FREQ}",
     "tg_report_hour": ${TG_REPORT_HOUR},
+    "tg_report_align": "${TG_REPORT_ALIGN:-natural}",
     "tg_monthly_reset_day": ${TG_MONTHLY_RESET_DAY},
     "dingtalk_enabled": ${DINGTALK_ENABLED},
     "dingtalk_webhook": "${DINGTALK_WEBHOOK}",
     "dingtalk_secret": "${DINGTALK_SECRET}",
     "dingtalk_report_freq": "${DINGTALK_REPORT_FREQ}",
     "dingtalk_report_hour": ${DINGTALK_REPORT_HOUR},
+    "dingtalk_report_align": "${DINGTALK_REPORT_ALIGN:-natural}",
     "dingtalk_monthly_reset_day": ${DINGTALK_MONTHLY_RESET_DAY},
     "qos_probe_enabled": true,
     "qos_probe_targets": ["https://www.google.co.jp", "https://www.yahoo.co.jp", "https://www.amazon.co.jp"],
