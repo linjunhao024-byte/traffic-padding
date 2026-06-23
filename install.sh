@@ -564,6 +564,45 @@ log_info() { echo -e "  ${GREEN}[✓]${NC} $1"; }
 
 CMD_NAME="$(basename "$0")"
 
+# 格式化日志行（表格模式）
+format_log_line() {
+    local line="$1"
+    # 提取时间（格式：Mon DD HH:MM:SS）
+    local time=$(echo "$line" | grep -oP '[A-Z][a-z]{2} +[0-9]+ +[0-9]+:[0-9]+:[0-9]+' | head -1)
+    # 提取消息内容（去掉时间戳和主机名等前缀）
+    local msg=$(echo "$line" | sed -E 's/^[A-Z][a-z]{2} +[0-9]+ +[0-9]+:[0-9]+:[0-9]+ [^ ]+ [a-z-]+\[[0-9]+\]: //')
+
+    # 根据消息类型设置颜色
+    local color="${NC}"
+    if echo "$msg" | grep -q "^\[INFO\]"; then
+        color="${GREEN}"
+    elif echo "$msg" | grep -q "^\[WARN\]"; then
+        color="${YELLOW}"
+    elif echo "$msg" | grep -q "^\[ERROR\]"; then
+        color="${RED}"
+    fi
+
+    # 输出格式化行
+    if [[ -n "$time" && -n "$msg" ]]; then
+        printf "  ${CYAN}│${NC}  %-14s ${color}%-60s${NC} ${CYAN}│${NC}\n" "$time" "$msg"
+    fi
+}
+
+# 显示日志表头
+show_log_header() {
+    local title="$1"
+    echo -e "${CYAN}+===========================================================================+${NC}"
+    printf "${CYAN}|${NC}  ${BOLD}%-69s${NC}${CYAN}|${NC}\n" "$title"
+    echo -e "${CYAN}+---------------------------------------------------------------------------+${NC}"
+    printf "${CYAN}|${NC}  %-14s %-60s ${CYAN}|${NC}\n" "时间" "消息"
+    echo -e "${CYAN}+---------------------------------------------------------------------------+${NC}"
+}
+
+# 显示日志表尾
+show_log_footer() {
+    echo -e "${CYAN}+===========================================================================+${NC}"
+}
+
 do_edit_config() {
     while true; do
         echo ""
@@ -1023,6 +1062,7 @@ do_update() {
     # 备份并替换
     echo -ne "  备份旧文件..."
     cp "${INSTALL_DIR}/main.py" "${INSTALL_DIR}/main.py.bak" 2>/dev/null
+    cp "${INSTALL_DIR}/tpm.sh" "${INSTALL_DIR}/tpm.sh.bak" 2>/dev/null
     echo -e " ${GREEN}✓${NC}"
 
     echo -ne "  更新 main.py..."
@@ -1034,8 +1074,14 @@ do_update() {
     mv /tmp/install.sh.new /tmp/install.sh
     # 获取当前快捷命令名称
     local current_cmd=$(basename "$0")
-    CMD_NAME="$current_cmd" bash /tmp/install.sh --update-tpm-only 2>/dev/null || true
-    echo -e " ${GREEN}✓${NC}"
+    # 执行更新，显示错误信息
+    if CMD_NAME="$current_cmd" bash /tmp/install.sh --update-tpm-only; then
+        echo -e " ${GREEN}✓${NC}"
+    else
+        echo -e " ${RED}✗${NC}"
+        echo -e "  ${RED}管理脚本更新失败，正在恢复备份...${NC}"
+        cp "${INSTALL_DIR}/tpm.sh.bak" "${INSTALL_DIR}/tpm.sh" 2>/dev/null
+    fi
 
     echo ""
     echo -e "${GREEN}  ✅ 更新完成！${NC}"
@@ -1091,16 +1137,25 @@ main() {
                 ;;
             5)
                 echo ""
-                echo -e "${YELLOW}  按 Enter 返回菜单...${NC}"
-                journalctl -u "${SERVICE_NAME}" -f --no-pager &
+                show_log_header "实时日志"
+                # 使用 tail -f 实时跟踪，并格式化输出
+                journalctl -u "${SERVICE_NAME}" -f --no-pager -o cat | while IFS= read -r line; do
+                    format_log_line "$(date '+%b %d %H:%M:%S') $line"
+                done &
                 local jctl_pid=$!
+                echo -e "${YELLOW}  按 Enter 返回菜单...${NC}"
                 read -r
                 kill $jctl_pid 2>/dev/null
                 wait $jctl_pid 2>/dev/null
+                show_log_footer
                 ;;
             6)
                 echo ""
-                journalctl -u "${SERVICE_NAME}" -n 50 --no-pager
+                show_log_header "最近日志 (50条)"
+                journalctl -u "${SERVICE_NAME}" -n 50 --no-pager | while IFS= read -r line; do
+                    format_log_line "$line"
+                done
+                show_log_footer
                 wait_key
                 ;;
             7)
@@ -1363,7 +1418,11 @@ uninstall() {
 
 # 仅更新管理脚本模式（供一键更新使用）
 if [[ "$1" == "--update-tpm-only" ]]; then
-    CMD_NAME="${CMD_NAME:-tp}"
+    # 如果环境变量 CMD_NAME 已设置（从 do_update 传递），则使用它
+    # 否则默认为 tp
+    if [[ -z "$CMD_NAME" ]]; then
+        CMD_NAME="tp"
+    fi
     generate_tpm
     exit 0
 fi
