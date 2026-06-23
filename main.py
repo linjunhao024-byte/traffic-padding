@@ -559,31 +559,32 @@ class URLPool:
             "Connection": "keep-alive",
         }
 
-    # 国内大厂 CDN 直链
+    # 国内镜像源（服务器常用）
     def _fetch_domestic_big_files(self) -> List[str]:
         urls = [
-            # 腾讯
-            "https://dldir1.qq.com/weixin/Windows/WeChatSetup.exe",
-            "https://dldir1.qq.com/qqfile/qq/QQNT/Windows/QQ_Release.exe",
-            "https://dldir1.qq.com/invc/tt/QQBrowser_Setup_Wireless.exe",
-            "https://dldir1.qq.com/music/clntupate/QQMusicSetup.exe",
-            "https://dldir1.qq.com/qqtv/TencentVideo_V11.91.9144.0.exe",
-            # 360
-            "https://dl.360safe.com/netlink/setup_360safe_netlink.exe",
-            # 阿里云
+            # 阿里云镜像（Ubuntu/CentOS/Python）
+            "https://mirrors.aliyun.com/ubuntu/ls-lR.gz",
+            "https://mirrors.aliyun.com/centos/7/isos/x86_64/CentOS-7-x86_64-Minimal-2009.iso",
+            "https://mirrors.aliyun.com/pypi/packages/source/p/pip/pip-23.0.tar.gz",
+            # 腾讯云镜像
+            "https://mirrors.tencent.com/ubuntu/ls-lR.gz",
+            "https://mirrors.tencent.com/centos/7/isos/x86_64/CentOS-7-x86_64-Minimal-2009.iso",
+            # 华为云镜像
+            "https://mirrors.huaweicloud.com/ubuntu/ls-lR.gz",
+            "https://mirrors.huaweicloud.com/centos/7/isos/x86_64/CentOS-7-x86_64-Minimal-2009.iso",
+            # 网易镜像
+            "https://mirrors.163.com/ubuntu/ls-lR.gz",
+            "https://mirrors.163.com/centos/7/isos/x86_64/CentOS-7-x86_64-Minimal-2009.iso",
+            # 清华镜像
+            "https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ls-lR.gz",
+            "https://mirrors.tuna.tsinghua.edu.cn/anaconda/archive/Anaconda3-2023.09-0-Linux-x86_64.sh",
+            # 中科大镜像
+            "https://mirrors.ustc.edu.cn/ubuntu/ls-lR.gz",
+            "https://mirrors.ustc.edu.cn/centos/7/isos/x86_64/CentOS-7-x86_64-Minimal-2009.iso",
+            # 阿里云 OSS 测试文件
             "https://cdn.aliyundcdntest.com/test_100m",
-            # 华为云
+            # 华为云 OBS 测试文件
             "https://huaweicloud.obs.cn-north-1.myhuaweicloud.com/obs_test_10m",
-            # 网易
-            "https://dldir1.163.com/kuaiyun/NetEaseCloudMusic_Music.exe",
-            # 字节
-            "https://lf1-cdn-tos.bytegoofy.com/obj/goofy/douyin/pc/DouyinInstaller.exe",
-            # 淘宝 CDN 测试文件
-            "https://img.alicdn.com/imgextra/i1/O1CN01tUQ7kv1OqjFK2FxjN_!!6000000001752-2-tps-1200-628.png",
-            # 七牛云测试
-            "https://qiniu-web-assets.dcloud.net.cn/unidoc/zh/uni-app-x-beta.pdf",
-            # 腾讯云 COS 测试
-            "https://cloud.tencent.com/developer/article/1004915",
         ]
         random.shuffle(urls)
         return urls[:5]
@@ -622,15 +623,29 @@ class URLPool:
             log_message("WARN", f"Wikipedia 失败: {e}", throttle_key="wiki_fail")
         return urls
 
-    # 国内测速文件（备用）
+    # 国内备用源（开发工具/容器/运行时）
     def _fetch_looking_glass(self) -> List[str]:
         urls = [
-            "https://speed.cloudflare.com/__down?bytes=10000000",
-            "https://dl.google.com/android/repository/platform-tools-latest-windows.zip",
-            "https://download.jetbrains.com/idea/ideaIU-2024.1.exe",
+            # Python/Node.js/Go 官方下载
+            "https://www.python.org/ftp/python/3.11.5/Python-3.11.5.tgz",
+            "https://nodejs.org/dist/v20.5.1/node-v20.5.1-linux-x64.tar.gz",
+            "https://go.dev/dl/go1.21.1.linux-amd64.tar.gz",
+            "https://github.com/rust-lang/rustup/releases/download/1.26.0/rustup-init",
+            # Docker/K8s 相关
+            "https://download.docker.com/linux/ubuntu/dists/jammy/pool/stable/amd64/containerd.io_1.6.22-1_amd64.deb",
+            "https://storage.googleapis.com/kubernetes-release/release/v1.28.2/bin/linux/amd64/kubectl",
+            # 常用工具
+            "https://github.com/cli/cli/releases/download/v2.34.0/gh_2.34.0_linux_amd64.tar.gz",
+            "https://github.com/git/git/archive/refs/tags/v2.42.0.tar.gz",
+            # Nginx/Apache
+            "https://nginx.org/download/nginx-1.25.2.tar.gz",
+            "https://archive.apache.org/dist/httpd/httpd-2.4.58.tar.gz",
+            # Redis/MySQL 客户端
+            "https://download.redis.io/releases/redis-7.2.1.tar.gz",
+            "https://dev.mysql.com/get/Downloads/MySQL-8.0/mysql-community-client-8.0.34-1.el7.x86_64.rpm",
         ]
         random.shuffle(urls)
-        return urls[:2]
+        return urls[:3]
 
     def refresh_pool(self) -> bool:
         log_message("INFO", "刷新 URL 池...")
@@ -638,8 +653,7 @@ class URLPool:
         sources = [
             ("国内CDN", self._fetch_domestic_big_files),
             ("必应中国", self._fetch_bing_china),
-            ("Wikipedia", self._fetch_wikipedia_random),
-            ("LookingGlass", self._fetch_looking_glass),
+            ("国内备用", self._fetch_looking_glass),
         ]
         for name, fetcher in sources:
             try:
