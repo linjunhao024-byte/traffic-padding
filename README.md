@@ -189,9 +189,9 @@ Traffic-Tadding/                   /opt/traffic-padding/
     "dingtalk_monthly_reset_day": 1,  // 月额度重置日（月报用）
     "qos_probe_enabled": true,        // 启用 QoS 探测
     "qos_probe_targets": [            // 探测目标（日本网站）
-        "http://www.google.co.jp",   // 日本 Google
-        "http://www.yahoo.co.jp",    // 日本雅虎
-        "http://www.amazon.co.jp"    // 日本亚马逊
+        "https://www.google.co.jp",  // 日本 Google
+        "https://www.yahoo.co.jp",   // 日本雅虎
+        "https://www.amazon.co.jp"   // 日本亚马逊
     ],
     "qos_probe_count": 5              // 每次探测的请求次数
 }

@@ -255,9 +255,9 @@ class QoSProbe:
         self.config = config
         self.enabled = config.get('qos_probe_enabled', True)
         self.probe_targets = config.get('qos_probe_targets', [
-            'http://www.google.co.jp',   # 日本 Google
-            'http://www.yahoo.co.jp',    # 日本雅虎
-            'http://www.amazon.co.jp',   # 日本亚马逊
+            'https://www.google.co.jp',   # 日本 Google
+            'https://www.yahoo.co.jp',    # 日本雅虎
+            'https://www.amazon.co.jp',   # 日本亚马逊
         ])
         self.probe_count = config.get('qos_probe_count', 5)  # 每次探测的请求次数
         self.history_file = QOS_STATS_FILE

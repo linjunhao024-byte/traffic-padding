@@ -1028,7 +1028,7 @@ generate_config() {
     "dingtalk_report_hour": ${DINGTALK_REPORT_HOUR},
     "dingtalk_monthly_reset_day": ${DINGTALK_MONTHLY_RESET_DAY},
     "qos_probe_enabled": true,
-    "qos_probe_targets": ["http://www.google.co.jp", "http://www.yahoo.co.jp", "http://www.amazon.co.jp"],
+    "qos_probe_targets": ["https://www.google.co.jp", "https://www.yahoo.co.jp", "https://www.amazon.co.jp"],
     "qos_probe_count": 5
 }
 EOF
