@@ -2082,22 +2082,33 @@ class DingTalkNotifier(BaseNotifier):
             return False
 
     def _draw_traffic_chart(self, service: 'TrafficPaddingService') -> str:
-        """生成横向流量柱状图"""
-        summary = service.get_traffic_summary(self.report_freq, self.report_align, self.report_hour)
-        if not summary or (summary['rx_mb'] == 0 and summary['tx_mb'] == 0 and summary['download_mb'] == 0):
+        """生成横向流量柱状图（用带宽监控 CSV 数据）"""
+        # 用今日带宽统计
+        bw_today = None
+        if service.bandwidth_monitor:
+            bw_today = service.bandwidth_monitor.get_today_stats()
+
+        # 用填充统计
+        stats = service.downloader.get_stats()
+        download_mb = stats['total_downloaded_mb']
+
+        rx_mb = bw_today['rx_bytes'] / (1024 * 1024) if bw_today else 0
+        tx_mb = bw_today['tx_bytes'] / (1024 * 1024) if bw_today else 0
+
+        if rx_mb == 0 and tx_mb == 0 and download_mb == 0:
             return ""
 
-        max_val = max(summary['rx_mb'], summary['tx_mb'], summary['download_mb'], 1)
+        max_val = max(rx_mb, tx_mb, download_mb, 1)
 
         def draw_bar(label, value, width=20):
             filled = int((value / max_val) * width) if max_val > 0 else 0
             bar = '█' * filled + '░' * (width - filled)
             return f"{label} {bar} {value:.1f}MB"
 
-        return f"""### 📊 流量柱状图 ({summary['label']})
-{draw_bar('TX ', summary['tx_mb'])}
-{draw_bar('RX ', summary['rx_mb'])}
-{draw_bar('填充', summary['download_mb'])}"""
+        return f"""### 📊 流量柱状图
+{draw_bar('RX ', rx_mb)}
+{draw_bar('TX ', tx_mb)}
+{draw_bar('填充', download_mb)}"""
 
     def build_report(self, service: 'TrafficPaddingService') -> str:
         d = self._collect_report_data(service)
