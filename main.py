@@ -253,19 +253,20 @@ class BandwidthMonitor:
         tx_speed = max(0.0, tx_delta * 8 / 1_000_000 / time_delta)
         total_speed = rx_speed + tx_speed
 
-        # 累计流量字节
-        self._today_rx_bytes += rx_delta
-        self._today_tx_bytes += tx_delta
-
         self.prev_rx = rx
         self.prev_tx = tx
         self.prev_ts = now
 
-        # 更新缓存和今日统计（加锁）
+        # 所有共享状态修改都在锁内
+        csv_to_write = None
         with self._lock:
             self._latest_rx_speed = rx_speed
             self._latest_tx_speed = tx_speed
             self._latest_total_speed = total_speed
+
+            # 累计流量字节
+            self._today_rx_bytes += rx_delta
+            self._today_tx_bytes += tx_delta
 
             # 分钟累积
             if rx_speed > self.min_rx_peak:
@@ -292,60 +293,75 @@ class BandwidthMonitor:
             self._today_total_sum += total_speed
             self._today_samples += 1
 
-        # 日期切换
-        today = datetime.now().strftime("%Y-%m-%d")
-        if today != self._today_date:
-            self._today_date = today
-            self._today_rx_peak = 0.0
-            self._today_tx_peak = 0.0
-            self._today_total_peak = 0.0
-            self._today_rx_sum = 0.0
-            self._today_tx_sum = 0.0
-            self._today_total_sum = 0.0
-            self._today_samples = 0
-            self._today_alert_count = 0
-            self._today_rx_bytes = 0
-            self._today_tx_bytes = 0
+            # 日期切换（在锁内完成，先写旧日期CSV再重置）
+            today = datetime.now().strftime("%Y-%m-%d")
+            if today != self._today_date:
+                # 准备写旧日期的最后一分钟CSV
+                if self.sample_count > 0:
+                    csv_to_write = self._today_date
+                self._today_date = today
+                self._today_rx_peak = 0.0
+                self._today_tx_peak = 0.0
+                self._today_total_peak = 0.0
+                self._today_rx_peak_time = ""
+                self._today_tx_peak_time = ""
+                self._today_total_peak_time = ""
+                self._today_rx_sum = 0.0
+                self._today_tx_sum = 0.0
+                self._today_total_sum = 0.0
+                self._today_samples = 0
+                self._today_alert_count = 0
+                self._today_rx_bytes = 0
+                self._today_tx_bytes = 0
 
-        # 分钟切换 → 写CSV
-        now_minute = datetime.now().strftime("%Y%m%d%H%M")
-        if now_minute != self.current_minute and self.sample_count > 0:
-            self._write_csv()
-            self.current_minute = now_minute
+            # 分钟切换 → 标记写CSV
+            now_minute = datetime.now().strftime("%Y%m%d%H%M")
+            if now_minute != self.current_minute and self.sample_count > 0:
+                if csv_to_write is None:
+                    csv_to_write = self._today_date
+                self.current_minute = now_minute
+
+        # 锁外执行CSV写入（IO操作）
+        if csv_to_write:
+            self._write_csv(csv_to_write)
 
         # 告警检查
         self._check_alert(rx_speed, tx_speed, total_speed)
 
-    def _write_csv(self):
+    def _write_csv(self, date_str: str = None):
         """写入一分钟的CSV记录"""
-        if self.sample_count == 0:
-            return
+        try:
+            if self.sample_count == 0:
+                return
 
-        csv_dir = self.config.get('csv_log_dir', '/etc/traffic-padding/logs')
-        os.makedirs(csv_dir, exist_ok=True)
-        csv_file = os.path.join(csv_dir, f"bandwidth_{self._today_date.replace('-', '')}.csv")
+            csv_dir = self.config.get('csv_log_dir', '/etc/traffic-padding/logs')
+            os.makedirs(csv_dir, exist_ok=True)
+            date_tag = (date_str or self._today_date).replace('-', '')
+            csv_file = os.path.join(csv_dir, f"bandwidth_{date_tag}.csv")
 
-        # 写表头
-        if not os.path.exists(csv_file):
-            with open(csv_file, 'w') as f:
-                f.write("timestamp,rx_peak_mbps,tx_peak_mbps,total_peak_mbps,rx_avg_mbps,tx_avg_mbps,total_avg_mbps,samples\n")
+            # 写表头
+            if not os.path.exists(csv_file):
+                with open(csv_file, 'w') as f:
+                    f.write("timestamp,rx_peak_mbps,tx_peak_mbps,total_peak_mbps,rx_avg_mbps,tx_avg_mbps,total_avg_mbps,samples\n")
 
-        rx_avg = self.min_rx_sum / self.sample_count
-        tx_avg = self.min_tx_sum / self.sample_count
-        total_peak = self.min_rx_peak + self.min_tx_peak
-        total_avg = rx_avg + tx_avg
-        ts = (datetime.now() - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M")
+            rx_avg = self.min_rx_sum / self.sample_count
+            tx_avg = self.min_tx_sum / self.sample_count
+            total_peak = self.min_rx_peak + self.min_tx_peak
+            total_avg = rx_avg + tx_avg
+            ts = (datetime.now() - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M")
 
-        with open(csv_file, 'a') as f:
-            f.write(f"{ts},{self.min_rx_peak:.4f},{self.min_tx_peak:.4f},{total_peak:.4f},"
-                    f"{rx_avg:.4f},{tx_avg:.4f},{total_avg:.4f},{self.sample_count}\n")
+            with open(csv_file, 'a') as f:
+                f.write(f"{ts},{self.min_rx_peak:.4f},{self.min_tx_peak:.4f},{total_peak:.4f},"
+                        f"{rx_avg:.4f},{tx_avg:.4f},{total_avg:.4f},{self.sample_count}\n")
 
-        # 重置分钟累积
-        self.min_rx_peak = 0.0
-        self.min_tx_peak = 0.0
-        self.min_rx_sum = 0.0
-        self.min_tx_sum = 0.0
-        self.sample_count = 0
+            # 重置分钟累积
+            self.min_rx_peak = 0.0
+            self.min_tx_peak = 0.0
+            self.min_rx_sum = 0.0
+            self.min_tx_sum = 0.0
+            self.sample_count = 0
+        except (IOError, OSError) as e:
+            log_message("ERROR", f"写入 CSV 失败: {e}")
 
     def get_latest_stats(self) -> Dict:
         """获取最新带宽数据（线程安全）"""
@@ -394,7 +410,8 @@ class BandwidthMonitor:
             self._alert_last_ts = now
             if self._alert_start_ts == 0:
                 self._alert_start_ts = now
-            self._today_alert_count += 1
+            with self._lock:
+                self._today_alert_count += 1
 
             over_pct = ((total_speed - threshold) / threshold * 100) if threshold > 0 else 0
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -583,6 +600,8 @@ class AIAnalyzer:
 
     def stop(self):
         self.running = False
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=95)
 
     def _run(self):
         """线程主循环：每 45-55 分钟随机调用一次"""
@@ -594,6 +613,8 @@ class AIAnalyzer:
 
         while self.running:
             self._do_analysis()
+            if not self.running:
+                return
             # 随机等待 45-55 分钟（抖动，确保不会超过 1 小时限额）
             wait_seconds = random.randint(2700, 3300)
             for _ in range(wait_seconds):
@@ -1458,7 +1479,7 @@ class MicroTaskDownloader:
         try:
             headers = {
                 "User-Agent": random.choice(USER_AGENTS),
-                "Range": f"bytes=0-{target_bytes}",
+                "Range": f"bytes=0-{target_bytes - 1}",
                 "Connection": "keep-alive",
             }
             req = urllib.request.Request(url, headers=headers)
@@ -1468,7 +1489,7 @@ class MicroTaskDownloader:
                     result['error'] = f"HTTP {resp.status}"
                     self.url_pool.record_url_failure(url)
                     self._record_error(f"HTTP {resp.status}")
-                    return result
+                    raise Exception(f"HTTP {resp.status}")
 
                 bytes_read = 0
                 while bytes_read < target_bytes:
@@ -1480,8 +1501,6 @@ class MicroTaskDownloader:
                 result['success'] = True
                 result['bytes_downloaded'] = bytes_read
                 self.total_downloaded += bytes_read
-                self.task_count += 1
-                self.success_count += 1
                 self.url_pool.record_url_success(url)
 
         except urllib.error.HTTPError as e:
@@ -1497,11 +1516,15 @@ class MicroTaskDownloader:
             self.url_pool.record_url_failure(url)
             self._record_error("超时")
         except Exception as e:
-            result['error'] = str(e)
+            if not result['error']:
+                result['error'] = str(e)
             self.url_pool.record_url_failure(url)
             self._record_error("其他错误")
 
-        if not result['success']:
+        self.task_count += 1
+        if result['success']:
+            self.success_count += 1
+        else:
             self.fail_count += 1
 
         result['duration'] = time.time() - start_time
@@ -1528,15 +1551,13 @@ class MicroTaskDownloader:
                     result['error'] = f"HTTP {resp.status}"
                     self.url_pool.record_url_failure(url)
                     self._record_error(f"HTTP {resp.status}")
-                    return result
+                    raise Exception(f"HTTP {resp.status}")
 
                 bytes_read = 0
                 while True:
-                    # 检查是否达到目标时间
                     elapsed = time.time() - start_time
                     if elapsed >= target_duration:
                         break
-
                     chunk = resp.read(8192)
                     if not chunk:
                         break
@@ -1545,8 +1566,6 @@ class MicroTaskDownloader:
                 result['success'] = True
                 result['bytes_downloaded'] = bytes_read
                 self.total_downloaded += bytes_read
-                self.task_count += 1
-                self.success_count += 1
                 self.url_pool.record_url_success(url)
 
         except urllib.error.HTTPError as e:
@@ -1562,11 +1581,15 @@ class MicroTaskDownloader:
             self.url_pool.record_url_failure(url)
             self._record_error("超时")
         except Exception as e:
-            result['error'] = str(e)
+            if not result['error']:
+                result['error'] = str(e)
             self.url_pool.record_url_failure(url)
             self._record_error("其他错误")
 
-        if not result['success']:
+        self.task_count += 1
+        if result['success']:
+            self.success_count += 1
+        else:
             self.fail_count += 1
 
         result['duration'] = time.time() - start_time
@@ -1749,13 +1772,13 @@ class BaseNotifier:
         elif self.report_freq == "monthly":
             reset_day = self.monthly_reset_day  # 月额度重置日（如每月 1 号）
             current_day = now.day
-            # 重置日前一天的中午后发送月报（提前通知）
-            # 例：reset_day=5 → 4 号 12:00 后发送
-            if current_day == reset_day - 1 and current_hour >= 12:
+            # 重置日前一天发送月报（提前通知）
+            # 例：reset_day=5 → 4 号发送
+            if current_day == reset_day - 1:
                 return True
             # 特殊处理：reset_day=1 时，前一天是上月最后一天
-            # 无法用 reset_day-1 表示，改为在本月 28~31 号的最后一天发送
-            if reset_day == 1 and current_day >= 28 and current_hour >= 12:
+            # 无法用 reset_day-1 表示，改为在本月最后一天发送
+            if reset_day == 1:
                 _, last_day = calendar.monthrange(now.year, now.month)
                 if current_day == last_day:
                     return True
@@ -1776,10 +1799,11 @@ class BaseNotifier:
         stats = service.downloader.get_stats()
         period = service.get_period_stats(self.report_freq)
 
-        # 月流量字符串
+        # 月流量字符串（用周期统计，不是内存计数器）
         monthly_str = ""
         if self.monthly_quota_gb != 0:
-            monthly_used_gb = stats['total_downloaded'] / (1024 ** 3)
+            period = service.get_period_stats('monthly')
+            monthly_used_gb = period['gb']
             if self.monthly_quota_gb == -1:
                 monthly_str = f"\n├ 月总额度: 无限\n└ 已消耗: {monthly_used_gb:.3f} GB"
             elif self.monthly_quota_gb > 0:
@@ -1933,7 +1957,9 @@ class TelegramNotifier(BaseNotifier):
         if d['error_lines']:
             lines = [f"├ {line}" for line in d['error_lines']]
             error_str = "\n" + "\n".join(lines)
-            error_str = error_str.replace("├", "└", error_str.rfind("├"))
+            idx = error_str.rfind("├")
+            if idx >= 0:
+                error_str = error_str[:idx] + "└" + error_str[idx + len("├"):]
 
         # URL 健康
         url_health_str = f"\n├ 健康: {d['healthy_count']}/{d['url_count']}" if d['healthy_count'] else ""
@@ -2678,7 +2704,12 @@ class TrafficPaddingService:
                     if last_status != 'bad':
                         self._send_qos_alert()
 
-        time.sleep(self.scheduler.calculate_jitter_sleep())
+        # 可中断的 sleep（每秒检查一次 self.running）
+        sleep_time = self.scheduler.calculate_jitter_sleep()
+        for _ in range(int(sleep_time)):
+            if not self.running:
+                break
+            time.sleep(1)
 
     def _send_qos_alert(self):
         """发送 QoS 告警"""
