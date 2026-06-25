@@ -588,13 +588,31 @@ class AIAnalyzer:
             time.sleep(1)
 
         while self.running:
-            self._analyze()
+            self._do_analysis()
             # 随机等待 45-55 分钟（抖动，确保不会超过 1 小时限额）
             wait_seconds = random.randint(2700, 3300)
             for _ in range(wait_seconds):
                 if not self.running:
                     return
                 time.sleep(1)
+
+    def _do_analysis(self):
+        """执行一次分析（带日志）"""
+        if not self.config.get('ai_enabled', True):
+            return
+        data = self._prepare_data()
+        if not data:
+            return
+        log_message("INFO", "执行 AI 分析...")
+        result = self._call_api(data)
+        if result:
+            with self._lock:
+                self._last_analysis = result
+                self._last_analysis_time = time.time()
+            self._save_cached()
+            log_message("INFO", f"AI 分析完成 ({len(result)} 字)")
+        else:
+            log_message("WARN", "AI 分析未返回结果")
 
     def _prepare_data(self) -> str:
         """准备发送给 AI 的数据摘要"""
@@ -692,27 +710,6 @@ class AIAnalyzer:
             log_message("WARN", f"AI 分析调用失败: {e}", throttle_key="ai_fail")
             return ""
 
-    def _analyze(self):
-        """执行一次分析"""
-        if not self.config.get('ai_enabled', True):
-            return
-
-        data = self._prepare_data()
-        if not data:
-            return
-
-        log_message("INFO", "执行 AI 分析...")
-        result = self._call_api(data)
-
-        if result:
-            with self._lock:
-                self._last_analysis = result
-                self._last_analysis_time = time.time()
-            self._save_cached()
-            log_message("INFO", f"AI 分析完成 ({len(result)} 字)")
-        else:
-            log_message("WARN", "AI 分析未返回结果")
-
     def get_latest(self) -> str:
         """获取最近一次分析结果"""
         with self._lock:
@@ -723,8 +720,26 @@ class AIAnalyzer:
             return self._last_analysis_time
 
     def trigger_now(self):
-        """手动触发一次分析（在当前线程执行）"""
-        threading.Thread(target=self._analyze, daemon=True).start()
+        """手动触发一次分析（独立线程，跳过启动延迟）"""
+        def _run():
+            if not self.config.get('ai_enabled', True):
+                log_message("WARN", "AI 分析已关闭，请先开启")
+                return
+            data = self._prepare_data()
+            if not data:
+                log_message("WARN", "无数据可分析")
+                return
+            log_message("INFO", "手动触发 AI 分析...")
+            result = self._call_api(data)
+            if result:
+                with self._lock:
+                    self._last_analysis = result
+                    self._last_analysis_time = time.time()
+                self._save_cached()
+                log_message("INFO", f"手动 AI 分析完成 ({len(result)} 字)")
+            else:
+                log_message("WARN", "手动 AI 分析失败")
+        threading.Thread(target=_run, daemon=True, name="AI-Manual").start()
 
 
 # ============================================================================
