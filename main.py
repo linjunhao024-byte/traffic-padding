@@ -33,7 +33,6 @@ HTTP_TIMEOUT = 15
 SLIDING_WINDOW_SIZE = 5
 CONFIG_RELOAD_INTERVAL = 300
 TG_CHECK_INTERVAL = 3600
-QOS_CHECK_INTERVAL = 600  # QoS 检测间隔（秒）
 TRAFFIC_RECORD_INTERVAL = 300  # 流量记录间隔（秒）
 
 # URL 中文名称映射
@@ -119,6 +118,22 @@ def atomic_write_json(filepath: str, data) -> bool:
 
 def detect_system_counter_bits() -> int:
     return struct.calcsize("P") * 8
+
+
+def read_net_dev(interface: str) -> Tuple[Optional[int], Optional[int]]:
+    """读取 /proc/net/dev 中指定网卡的 RX/TX 字节数，失败返回 (None, None)"""
+    try:
+        with open('/proc/net/dev', 'r') as f:
+            for line in f:
+                if ':' not in line:
+                    continue
+                name, data = line.split(':', 1)
+                if name.strip() == interface:
+                    fields = data.split()
+                    return int(fields[0]), int(fields[8])
+    except (IOError, ValueError, IndexError):
+        pass
+    return None, None
 
 
 def calculate_counter_delta(prev: int, curr: int, max_val: int) -> int:
@@ -216,18 +231,7 @@ class TrafficMonitor:
             self.baseline_valid = False
 
     def _read_proc_net_dev(self) -> Tuple[Optional[int], Optional[int]]:
-        try:
-            with open('/proc/net/dev', 'r') as f:
-                for line in f:
-                    if ':' not in line:
-                        continue
-                    iface, data = line.split(':', 1)
-                    if iface.strip() == self.interface:
-                        fields = data.split()
-                        return int(fields[0]), int(fields[8])
-        except (IOError, ValueError, IndexError) as e:
-            log_message("ERROR", f"读取 /proc/net/dev 失败: {e}")
-        return None, None
+        return read_net_dev(self.interface)
 
     def get_traffic_stats(self) -> Dict:
         if not self.baseline_valid:
@@ -651,24 +655,6 @@ class URLPool:
                         urls.append(f"https://cn.bing.com{img['url']}")
         except Exception as e:
             log_message("WARN", f"必应 API 失败: {e}", throttle_key="bing_fail")
-        return urls
-
-    # Wikipedia（国内可能被墙）
-    def _fetch_wikipedia_random(self) -> List[str]:
-        urls = []
-        try:
-            req = urllib.request.Request(
-                "https://en.wikipedia.org/api/rest_v1/page/random/summary",
-                headers=self._get_request_headers()
-            )
-            with urllib.request.urlopen(req, timeout=8, context=SSL_CONTEXT_SAFE) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-                for key in ('thumbnail', 'originalimage'):
-                    src = data.get(key, {}).get('source')
-                    if src:
-                        urls.append(src)
-        except Exception as e:
-            log_message("WARN", f"Wikipedia 失败: {e}", throttle_key="wiki_fail")
         return urls
 
     # 国内备用源（服务器全栈资源）
@@ -1162,51 +1148,6 @@ class BaseNotifier:
             return False
         return False
 
-    def _get_period_start_time(self, freq: str) -> datetime:
-        """获取统计周期的开始时间"""
-        now = datetime.now()
-
-        if self.report_align == 'push_time':
-            # 按推送时间对齐
-            if freq == 'daily':
-                # 从今天 report_hour:00 开始
-                start = now.replace(hour=self.report_hour, minute=0, second=0, microsecond=0)
-                if now < start:
-                    # 如果当前时间还没到推送时间，从昨天的推送时间开始
-                    start = start - timedelta(days=1)
-                return start
-            elif freq == 'weekly':
-                # 从本周的推送时间开始
-                start = now.replace(hour=self.report_hour, minute=0, second=0, microsecond=0)
-                # 找到本周的推送日（周一）
-                days_since_monday = now.weekday()
-                start = start - timedelta(days=days_since_monday)
-                if now < start:
-                    start = start - timedelta(weeks=1)
-                return start
-            elif freq == 'monthly':
-                # 从本月的推送时间开始
-                start = now.replace(day=1, hour=self.report_hour, minute=0, second=0, microsecond=0)
-                if now < start:
-                    # 如果当前时间还没到推送时间，从上个月开始
-                    if start.month == 1:
-                        start = start.replace(year=start.year - 1, month=12)
-                    else:
-                        start = start.replace(month=start.month - 1)
-                return start
-        else:
-            # 自然日/周/月
-            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            if freq == 'daily':
-                return today_start
-            elif freq == 'weekly':
-                monday = today_start - timedelta(days=today_start.weekday())
-                return monday
-            elif freq == 'monthly':
-                return today_start.replace(day=1)
-
-        return now.replace(hour=0, minute=0, second=0, microsecond=0)
-
     def _format_uptime(self, service: 'TrafficPaddingService') -> str:
         """格式化运行时长"""
         seconds = int(time.time() - service.start_time)
@@ -1216,21 +1157,96 @@ class BaseNotifier:
             return f"{hours // 24}天{hours % 24}小时"
         return f"{hours}小时{minutes}分钟"
 
-    def _get_monthly_usage_str(self, total_downloaded_bytes: int) -> str:
-        """生成月流量使用字符串"""
-        if self.monthly_quota_gb == 0:
-            return ""
-        monthly_used_gb = total_downloaded_bytes / (1024 ** 3)
-        if self.monthly_quota_gb == -1:
-            return f"\n\n📊 月流量统计\n├ 月总额度: 无限\n└ 已消耗: {monthly_used_gb:.3f} GB"
-        elif self.monthly_quota_gb > 0:
-            monthly_pct = (monthly_used_gb / self.monthly_quota_gb) * 100
-            return f"\n\n📊 月额度使用\n├ 月总额度: {self.monthly_quota_gb:.1f} GB\n├ 已消耗: {monthly_used_gb:.3f} GB\n└ 占比: {monthly_pct:.2f}%"
-        return ""
+    def _collect_report_data(self, service: 'TrafficPaddingService') -> Dict:
+        """采集报告数据（TG/钉钉共用）"""
+        stats = service.downloader.get_stats()
+        period = service.get_period_stats(self.report_freq)
+
+        # 月流量字符串
+        monthly_str = ""
+        if self.monthly_quota_gb != 0:
+            monthly_used_gb = stats['total_downloaded'] / (1024 ** 3)
+            if self.monthly_quota_gb == -1:
+                monthly_str = f"\n├ 月总额度: 无限\n└ 已消耗: {monthly_used_gb:.3f} GB"
+            elif self.monthly_quota_gb > 0:
+                monthly_pct = (monthly_used_gb / self.monthly_quota_gb) * 100
+                monthly_str = f"\n├ 月总额度: {self.monthly_quota_gb:.1f} GB\n├ 已消耗: {monthly_used_gb:.3f} GB\n└ 占比: {monthly_pct:.2f}%"
+
+        # 下载速度
+        avg_speed = service.downloader.get_avg_speed()
+        fastest = service.downloader.get_fastest_url()
+        slowest = service.downloader.get_slowest_url()
+
+        # 错误统计
+        error_stats = service.downloader.get_error_stats()
+        error_lines = []
+        if error_stats:
+            for err, count in list(error_stats.items())[:3]:
+                error_lines.append(f"{err}: {count} 次")
+            if len(error_stats) > 3:
+                error_lines.append(f"...共 {len(error_stats)} 种错误")
+
+        # 网卡流量对比
+        net_stats = service.get_network_stats()
+        fill_ratio = (stats['total_downloaded_mb'] / net_stats['rx_mb'] * 100) if net_stats['rx_mb'] > 0 else 0
+
+        # URL 健康
+        healthy_count = 0
+        if service.url_pool.url_health:
+            healthy_count = sum(1 for h in service.url_pool.url_health.values()
+                               if h['success'] / max(1, h['success'] + h['fail']) > 0.8)
+
+        # QoS 状态
+        qos_result = service._cached_qos_result or {}
+
+        return {
+            'now': datetime.now(),
+            'stats': stats,
+            'period': period,
+            'daily_quota_gb': service.config.get('max_daily_extra_gb', 10),
+            'quota_used': service.scheduler.daily_quota_used,
+            'total_gb': service.total_downloaded_all_time / (1024 ** 3),
+            'monthly_str': monthly_str,
+            'avg_speed': avg_speed,
+            'fastest': fastest,
+            'slowest': slowest,
+            'error_lines': error_lines,
+            'net_stats': net_stats,
+            'fill_ratio': fill_ratio,
+            'url_count': service.url_pool.get_url_count(),
+            'healthy_count': healthy_count,
+            'qos_enabled': service.qos_probe.enabled,
+            'qos_status': service.qos_probe.get_status_str(),
+            'qos_trend': service.qos_probe.get_trend(),
+            'qos_result': qos_result,
+            'cycle_count': service.cycle_count,
+            'uptime': self._format_uptime(service),
+            'interface': service.config.get('interface'),
+            'target_ratio': service.config.get('target_ratio'),
+            'time_weight': service.scheduler.get_time_weight(),
+            'server_name': service.server_name,
+            'freq_label': self._get_freq_label(),
+        }
 
     def _get_freq_label(self) -> str:
         """获取频率标签"""
         return {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(self.report_freq, "报告")
+
+    def check_and_send(self, service: 'TrafficPaddingService'):
+        """检查是否该发送报告并发送"""
+        if not self.enabled:
+            return
+        if self._should_report():
+            report = self.build_report(service)
+            if self.send_message(report):
+                self.last_report_date = datetime.now().strftime("%Y-%m-%d")
+                log_message("INFO", f"{self._get_freq_label()} 报告已发送")
+            else:
+                log_message("WARN", f"{self._get_freq_label()} 报告发送失败")
+
+    def build_report(self, service: 'TrafficPaddingService') -> str:
+        """生成报告（子类必须实现）"""
+        raise NotImplementedError
 
 
 # ============================================================================
@@ -1264,122 +1280,68 @@ class TelegramNotifier(BaseNotifier):
             return False
 
     def build_report(self, service: 'TrafficPaddingService') -> str:
-        now = datetime.now()
-        stats = service.downloader.get_stats()
-        quota_used = service.scheduler.daily_quota_used
-        daily_quota_gb = service.config.get('max_daily_extra_gb', 10)
-        url_count = service.url_pool.get_url_count()
-        freq_label = self._get_freq_label()
+        d = self._collect_report_data(service)
+        period_str = f"{d['period']['label']}: {d['period']['gb']:.3f} GB"
 
-        # 获取周期统计
-        period = service.get_period_stats(self.report_freq)
-        period_str = f"{period['label']}: {period['gb']:.3f} GB"
-
-        # 总用量
-        total_gb = service.total_downloaded_all_time / (1024 ** 3)
-
-        # 月流量
-        monthly_usage_str = ""
-        if self.monthly_quota_gb != 0:
-            monthly_used_gb = stats['total_downloaded'] / (1024 ** 3)
-            if self.monthly_quota_gb == -1:
-                monthly_usage_str = f"\n├ 月总额度: 无限\n└ 已消耗: {monthly_used_gb:.3f} GB"
-            elif self.monthly_quota_gb > 0:
-                monthly_pct = (monthly_used_gb / self.monthly_quota_gb) * 100
-                monthly_usage_str = f"\n├ 月总额度: {self.monthly_quota_gb:.1f} GB\n├ 已消耗: {monthly_used_gb:.3f} GB\n└ 占比: {monthly_pct:.2f}%"
-
-        # 下载速度统计
-        avg_speed = service.downloader.get_avg_speed()
-        fastest = service.downloader.get_fastest_url()
-        slowest = service.downloader.get_slowest_url()
-
-        # 错误统计
-        error_stats = service.downloader.get_error_stats()
+        # 错误统计格式化
         error_str = ""
-        if error_stats:
-            error_lines = [f"├ {err}: {count} 次" for err, count in list(error_stats.items())[:3]]
-            error_str = "\n" + "\n".join(error_lines)
-            if len(error_stats) > 3:
-                error_str += f"\n└ ...共 {len(error_stats)} 种错误"
-            else:
-                error_str = error_str.replace("├", "└", 1)
+        if d['error_lines']:
+            lines = [f"├ {line}" for line in d['error_lines']]
+            error_str = "\n" + "\n".join(lines)
+            error_str = error_str.replace("├", "└", error_str.rfind("├"))
 
-        # 网卡流量对比
-        net_stats = service.get_network_stats()
-        fill_ratio = 0
-        if net_stats['rx_mb'] > 0:
-            fill_ratio = (stats['total_downloaded_mb'] / net_stats['rx_mb']) * 100
-
-        # URL 健康状态
-        url_health_str = ""
-        if service.url_pool.url_health:
-            healthy = sum(1 for h in service.url_pool.url_health.values()
-                         if h['success'] / max(1, h['success'] + h['fail']) > 0.8)
-            url_health_str = f"\n├ 健康: {healthy}/{url_count}"
+        # URL 健康
+        url_health_str = f"\n├ 健康: {d['healthy_count']}/{d['url_count']}" if d['healthy_count'] else ""
 
         # QoS 状态
         qos_str = ""
-        if service.qos_probe.enabled:
-            qos_status = service.qos_probe.get_status_str()
-            qos_trend = service.qos_probe.get_trend()
-            qos_result = service._cached_qos_result or {}
+        if d['qos_enabled']:
             qos_str = f"""
 
 🌐 QoS 探测
-├ 状态: {qos_status}
-├ 趋势: {qos_trend}
-├ 延迟: {qos_result.get('latency_avg', 0):.0f}ms
-├ 抖动: {qos_result.get('jitter', 0):.0f}ms
-└ 丢包: {qos_result.get('loss', 0):.0f}%"""
+├ 状态: {d['qos_status']}
+├ 趋势: {d['qos_trend']}
+├ 延迟: {d['qos_result'].get('latency_avg', 0):.0f}ms
+├ 抖动: {d['qos_result'].get('jitter', 0):.0f}ms
+└ 丢包: {d['qos_result'].get('loss', 0):.0f}%"""
 
-        return f"""📋 <b>Traffic Padding {freq_label}</b>
+        return f"""📋 <b>Traffic Padding {d['freq_label']}</b>
 ━━━━━━━━━━━━━━━━━━━━
 
-🖥️ <b>{service.server_name}</b>
+🖥️ <b>{d['server_name']}</b>
 
-🕐 {now.strftime("%Y-%m-%d %H:%M")}
+🕐 {d['now'].strftime("%Y-%m-%d %H:%M")}
 
 📊 用量统计
 ├ {period_str}
-├ 累计总量: {total_gb:.3f} GB
-├ 今日配额: {quota_used / (1024**3):.3f} / {daily_quota_gb:.1f} GB{monthly_usage_str}
+├ 累计总量: {d['total_gb']:.3f} GB
+├ 今日配额: {d['quota_used'] / (1024**3):.3f} / {d['daily_quota_gb']:.1f} GB{d['monthly_str']}
 
 📈 下载性能
-├ 平均速度: {avg_speed:.2f} MB/s
-├ 最快来源: {fastest[0]} ({fastest[1]:.1f} MB/s)
-└ 最慢来源: {slowest[0]} ({slowest[1]:.1f} MB/s)
+├ 平均速度: {d['avg_speed']:.2f} MB/s
+├ 最快来源: {d['fastest'][0]} ({d['fastest'][1]:.1f} MB/s)
+└ 最慢来源: {d['slowest'][0]} ({d['slowest'][1]:.1f} MB/s)
 
 📊 流量对比
-├ 实际 RX: {net_stats['rx_mb']:.1f} MB
-├ 实际 TX: {net_stats['tx_mb']:.1f} MB
-├ 填充下载: {stats['total_downloaded_mb']:.1f} MB
-└ 填充占比: {fill_ratio:.1f}%
+├ 实际 RX: {d['net_stats']['rx_mb']:.1f} MB
+├ 实际 TX: {d['net_stats']['tx_mb']:.1f} MB
+├ 填充下载: {d['stats']['total_downloaded_mb']:.1f} MB
+└ 填充占比: {d['fill_ratio']:.1f}%
 
 🔗 URL 状态
-├ 总数: {url_count} 个{url_health_str}
-├ 成功: {stats['success_count']} 次
-└ 失败: {stats['fail_count']} 次{error_str}{qos_str}
+├ 总数: {d['url_count']} 个{url_health_str}
+├ 成功: {d['stats']['success_count']} 次
+└ 失败: {d['stats']['fail_count']} 次{error_str}{qos_str}
 
 📈 运行状态
-├ 周期: {service.cycle_count}
-├ 任务: {stats['task_count']}
-└ 时长: {self._format_uptime(service)}
+├ 周期: {d['cycle_count']}
+├ 任务: {d['stats']['task_count']}
+└ 时长: {d['uptime']}
 
 ⚙️ 配置
-├ 网卡: {service.config.get('interface')}
-├ 比例: 1:{service.config.get('target_ratio')}
-└ 权重: {service.scheduler.get_time_weight():.2f}x"""
-
-    def check_and_send(self, service: 'TrafficPaddingService'):
-        if not self.enabled:
-            return
-        if self._should_report():
-            report = self.build_report(service)
-            if self.send_message(report):
-                self.last_report_date = datetime.now().strftime("%Y-%m-%d")
-                log_message("INFO", f"TG {self.report_freq} 报告已发送")
-            else:
-                log_message("WARN", "TG 报告发送失败")
+├ 网卡: {d['interface']}
+├ 比例: 1:{d['target_ratio']}
+└ 权重: {d['time_weight']:.2f}x"""
 
 
 # ============================================================================
@@ -1418,13 +1380,9 @@ class DingTalkNotifier(BaseNotifier):
             return False
         try:
             url = self._get_sign_url()
-            # 钉钉 markdown 消息格式
             data = json.dumps({
                 "msgtype": "markdown",
-                "markdown": {
-                    "title": "Traffic Padding 报告",
-                    "text": text
-                }
+                "markdown": {"title": "Traffic Padding 报告", "text": text}
             }).encode('utf-8')
             req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=15, context=SSL_CONTEXT_SAFE) as resp:
@@ -1434,159 +1392,99 @@ class DingTalkNotifier(BaseNotifier):
             log_message("WARN", f"钉钉推送失败: {e}", throttle_key="dingtalk_fail")
             return False
 
-    def _draw_bar(self, label: str, value: float, max_value: float, width: int = 30) -> str:
-        """绘制 ASCII 柱状图"""
-        if max_value <= 0:
-            filled = 0
-        else:
-            filled = int((value / max_value) * width)
-        bar = '█' * filled + '░' * (width - filled)
-        return f"  {label:12s} {bar}  {value:>8.1f} MB"
-
     def _draw_traffic_chart(self, service: 'TrafficPaddingService') -> str:
         """生成流量柱状图"""
-        # 获取流量统计
         summary = service.get_traffic_summary(self.report_freq, self.report_align, self.report_hour)
         if not summary or (summary['rx_mb'] == 0 and summary['tx_mb'] == 0 and summary['download_mb'] == 0):
             return ""
 
         max_val = max(summary['rx_mb'], summary['tx_mb'], summary['download_mb'], 1)
 
-        chart = f"""
+        def draw_bar(label, value, width=30):
+            filled = int((value / max_val) * width) if max_val > 0 else 0
+            bar = '█' * filled + '░' * (width - filled)
+            return f"  {label:12s} {bar}  {value:>8.1f} MB"
+
+        return f"""
 ### 📊 流量柱状图 ({summary['label']})
 
 ```
 ┌─────────────────────────────────────────────────────┐
 │                                                     │
-{self._draw_bar('上行 (TX)', summary['tx_mb'], max_val)}   │
+{draw_bar('上行 (TX)', summary['tx_mb'])}   │
 │                                                     │
-{self._draw_bar('下行 (RX)', summary['rx_mb'], max_val)}   │
+{draw_bar('下行 (RX)', summary['rx_mb'])}   │
 │                                                     │
-{self._draw_bar('填充下载', summary['download_mb'], max_val)}   │
+{draw_bar('填充下载', summary['download_mb'])}   │
 │                                                     │
 └─────────────────────────────────────────────────────┘
 ```"""
-        return chart
 
     def build_report(self, service: 'TrafficPaddingService') -> str:
-        now = datetime.now()
-        stats = service.downloader.get_stats()
-        quota_used = service.scheduler.daily_quota_used
-        daily_quota_gb = service.config.get('max_daily_extra_gb', 10)
-        url_count = service.url_pool.get_url_count()
-        freq_label = self._get_freq_label()
+        d = self._collect_report_data(service)
+        period_str = f"{d['period']['label']}: {d['period']['gb']:.3f} GB"
 
-        # 获取周期统计
-        period = service.get_period_stats(self.report_freq)
-        period_str = f"{period['label']}: {period['gb']:.3f} GB"
-
-        # 总用量
-        total_gb = service.total_downloaded_all_time / (1024 ** 3)
-
-        # 月流量
-        monthly_usage_str = ""
-        if self.monthly_quota_gb != 0:
-            monthly_used_gb = stats['total_downloaded'] / (1024 ** 3)
-            if self.monthly_quota_gb == -1:
-                monthly_usage_str = f"\n- 月总额度: 无限\n- 已消耗: {monthly_used_gb:.3f} GB"
-            elif self.monthly_quota_gb > 0:
-                monthly_pct = (monthly_used_gb / self.monthly_quota_gb) * 100
-                monthly_usage_str = f"\n- 月总额度: {self.monthly_quota_gb:.1f} GB\n- 已消耗: {monthly_used_gb:.3f} GB\n- 占比: {monthly_pct:.2f}%"
-
-        # 下载速度统计
-        avg_speed = service.downloader.get_avg_speed()
-        fastest = service.downloader.get_fastest_url()
-        slowest = service.downloader.get_slowest_url()
-
-        # 错误统计
-        error_stats = service.downloader.get_error_stats()
+        # 错误统计格式化
         error_str = ""
-        if error_stats:
-            error_lines = [f"- {err}: {count} 次" for err, count in list(error_stats.items())[:3]]
-            error_str = "\n" + "\n".join(error_lines)
-            if len(error_stats) > 3:
-                error_str += f"\n- ...共 {len(error_stats)} 种错误"
+        if d['error_lines']:
+            lines = [f"- {line}" for line in d['error_lines']]
+            error_str = "\n" + "\n".join(lines)
 
-        # 网卡流量对比
-        net_stats = service.get_network_stats()
-        fill_ratio = 0
-        if net_stats['rx_mb'] > 0:
-            fill_ratio = (stats['total_downloaded_mb'] / net_stats['rx_mb']) * 100
-
-        # URL 健康状态
-        url_health_str = ""
-        if service.url_pool.url_health:
-            healthy = sum(1 for h in service.url_pool.url_health.values()
-                         if h['success'] / max(1, h['success'] + h['fail']) > 0.8)
-            url_health_str = f"\n- 健康: {healthy}/{url_count}"
+        # URL 健康
+        url_health_str = f"\n- 健康: {d['healthy_count']}/{d['url_count']}" if d['healthy_count'] else ""
 
         # QoS 状态
         qos_str = ""
-        if service.qos_probe.enabled:
-            qos_status = service.qos_probe.get_status_str()
-            qos_trend = service.qos_probe.get_trend()
-            qos_result = service._cached_qos_result or {}
+        if d['qos_enabled']:
             qos_str = f"""
 
 ### 🌐 QoS 探测
-- 状态: {qos_status}
-- 趋势: {qos_trend}
-- 延迟: {qos_result.get('latency_avg', 0):.0f}ms
-- 抖动: {qos_result.get('jitter', 0):.0f}ms
-- 丢包: {qos_result.get('loss', 0):.0f}%"""
+- 状态: {d['qos_status']}
+- 趋势: {d['qos_trend']}
+- 延迟: {d['qos_result'].get('latency_avg', 0):.0f}ms
+- 抖动: {d['qos_result'].get('jitter', 0):.0f}ms
+- 丢包: {d['qos_result'].get('loss', 0):.0f}%"""
 
-        # 流量柱状图
         chart_str = self._draw_traffic_chart(service)
 
-        return f"""## 📋 Traffic Padding {freq_label}
+        return f"""## 📋 Traffic Padding {d['freq_label']}
 
 ---
 
-**🖥️ {service.server_name}**
+**🖥️ {d['server_name']}**
 
-🕐 **{now.strftime("%Y-%m-%d %H:%M")}**
+🕐 **{d['now'].strftime("%Y-%m-%d %H:%M")}**
 
 ### 📊 用量统计
 - {period_str}
-- 累计总量: {total_gb:.3f} GB
-- 今日配额: {quota_used / (1024**3):.3f} / {daily_quota_gb:.1f} GB{monthly_usage_str}
+- 累计总量: {d['total_gb']:.3f} GB
+- 今日配额: {d['quota_used'] / (1024**3):.3f} / {d['daily_quota_gb']:.1f} GB{d['monthly_str']}
 
 ### 📈 下载性能
-- 平均速度: {avg_speed:.2f} MB/s
-- 最快来源: {fastest[0]} ({fastest[1]:.1f} MB/s)
-- 最慢来源: {slowest[0]} ({slowest[1]:.1f} MB/s)
+- 平均速度: {d['avg_speed']:.2f} MB/s
+- 最快来源: {d['fastest'][0]} ({d['fastest'][1]:.1f} MB/s)
+- 最慢来源: {d['slowest'][0]} ({d['slowest'][1]:.1f} MB/s)
 
 ### 📊 流量对比
-- 实际 RX: {net_stats['rx_mb']:.1f} MB
-- 实际 TX: {net_stats['tx_mb']:.1f} MB
-- 填充下载: {stats['total_downloaded_mb']:.1f} MB
-- 填充占比: {fill_ratio:.1f}%
+- 实际 RX: {d['net_stats']['rx_mb']:.1f} MB
+- 实际 TX: {d['net_stats']['tx_mb']:.1f} MB
+- 填充下载: {d['stats']['total_downloaded_mb']:.1f} MB
+- 填充占比: {d['fill_ratio']:.1f}%
 
 ### 🔗 URL 状态
-- 总数: {url_count} 个{url_health_str}
-- 成功: {stats['success_count']} 次
-- 失败: {stats['fail_count']} 次{error_str}{qos_str}{chart_str}
+- 总数: {d['url_count']} 个{url_health_str}
+- 成功: {d['stats']['success_count']} 次
+- 失败: {d['stats']['fail_count']} 次{error_str}{qos_str}{chart_str}
 
 ### 📈 运行状态
-- 周期: {service.cycle_count}
-- 任务: {stats['task_count']}
-- 时长: {self._format_uptime(service)}
+- 周期: {d['cycle_count']}
+- 任务: {d['stats']['task_count']}
+- 时长: {d['uptime']}
 
 ### ⚙️ 配置
-- 网卡: {service.config.get('interface')}
-- 比例: 1:{service.config.get('target_ratio')}
-- 权重: {service.scheduler.get_time_weight():.2f}x"""
-
-    def check_and_send(self, service: 'TrafficPaddingService'):
-        if not self.enabled:
-            return
-        if self._should_report():
-            report = self.build_report(service)
-            if self.send_message(report):
-                self.last_report_date = datetime.now().strftime("%Y-%m-%d")
-                log_message("INFO", f"钉钉 {self.report_freq} 报告已发送")
-            else:
-                log_message("WARN", "钉钉报告发送失败")
+- 网卡: {d['interface']}
+- 比例: 1:{d['target_ratio']}
+- 权重: {d['time_weight']:.2f}x"""
 
 
 # ============================================================================
@@ -1596,11 +1494,8 @@ class DingTalkNotifier(BaseNotifier):
 class HealthChecker:
     @staticmethod
     def check_interface(interface: str) -> bool:
-        try:
-            with open('/proc/net/dev', 'r') as f:
-                return any(f"{interface}:" in line for line in f)
-        except IOError:
-            return False
+        rx, tx = read_net_dev(interface)
+        return rx is not None
 
     @staticmethod
     def check_config(config_path: str) -> bool:
@@ -1624,7 +1519,7 @@ class HealthChecker:
                         return True
             except Exception:
                 continue
-        return True
+        return False
 
     @classmethod
     def run_all_checks(cls, interface: str, config_path: str) -> bool:
@@ -1820,39 +1715,17 @@ class TrafficPaddingService:
 
     def _init_network_baseline(self):
         """初始化网卡流量基准"""
-        iface = self.config.get('interface', 'eth0')
-        try:
-            with open('/proc/net/dev', 'r') as f:
-                for line in f:
-                    if ':' not in line:
-                        continue
-                    name, data = line.split(':', 1)
-                    if name.strip() == iface:
-                        fields = data.split()
-                        self.start_rx_bytes = int(fields[0])
-                        self.start_tx_bytes = int(fields[8])
-                        break
-        except (IOError, ValueError, IndexError):
-            pass
+        rx, tx = read_net_dev(self.config.get('interface', 'eth0'))
+        if rx is not None:
+            self.start_rx_bytes = rx
+            self.start_tx_bytes = tx
 
     def get_network_stats(self) -> Dict:
         """获取网卡流量统计"""
         iface = self.config.get('interface', 'eth0')
-        current_rx = 0
-        current_tx = 0
-        try:
-            with open('/proc/net/dev', 'r') as f:
-                for line in f:
-                    if ':' not in line:
-                        continue
-                    name, data = line.split(':', 1)
-                    if name.strip() == iface:
-                        fields = data.split()
-                        current_rx = int(fields[0])
-                        current_tx = int(fields[8])
-                        break
-        except (IOError, ValueError, IndexError):
-            pass
+        rx, tx = read_net_dev(iface)
+        current_rx = rx if rx is not None else 0
+        current_tx = tx if tx is not None else 0
 
         rx_delta = current_rx - self.start_rx_bytes
         tx_delta = current_tx - self.start_tx_bytes
@@ -1863,35 +1736,6 @@ class TrafficPaddingService:
             'rx_mb': rx_delta / (1024 * 1024),
             'tx_mb': tx_delta / (1024 * 1024)
         }
-
-    def estimate_days_remaining(self) -> int:
-        """预估配额用完天数"""
-        if len(self.daily_stats) < 2:
-            return -1  # 数据不足
-
-        # 计算最近 7 天平均用量
-        now = datetime.now()
-        total_recent = 0
-        days_count = 0
-        for i in range(7):
-            day = (now - timedelta(days=i)).strftime("%Y-%m-%d")
-            if day in self.daily_stats:
-                total_recent += self.daily_stats[day]
-                days_count += 1
-
-        if days_count == 0:
-            return -1
-
-        avg_daily = total_recent / days_count
-        if avg_daily == 0:
-            return -1
-
-        remaining_quota = self.scheduler.daily_quota_limit - self.scheduler.daily_quota_used
-        # 如果是无限配额，返回 -1
-        if self.config.get('max_daily_extra_gb', 10) <= 0:
-            return -1
-
-        return int(remaining_quota / avg_daily)
 
     def _load_stats(self):
         """加载历史统计数据"""
