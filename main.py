@@ -992,12 +992,13 @@ class QoSProbe:
             if not result['success']:
                 failed_targets.append(f"{target} ({result.get('error', '未知')})")
 
-            # 多次测量同一目标
+            # 多次测量同一目标（只计算延迟，不重复计入失败）
             if self.probe_count > 1:
                 for _ in range(self.probe_count - 1):
                     time.sleep(random.uniform(0.3, 0.8))
                     r = self.probe_single(target)
-                    results.append(r)
+                    if r['success']:
+                        results.append(r)  # 成功的计入延迟统计
 
         # 汇总结果
         successful = [r for r in results if r['success']]
@@ -1810,8 +1811,11 @@ class BaseNotifier:
             healthy_count = sum(1 for url, h in service.url_pool.url_health.items()
                                if url in pool_set and h['success'] / max(1, h['success'] + h['fail']) > 0.8)
 
-        # QoS 状态
-        qos_result = service._cached_qos_result or {}
+        # QoS 状态（优先用缓存，没有则从 history 取最近一条）
+        qos_result = service._cached_qos_result
+        if not qos_result and service.qos_probe.history:
+            qos_result = service.qos_probe.history[-1]
+        qos_result = qos_result or {}
 
         # 带宽监控数据
         bw_stats = None
