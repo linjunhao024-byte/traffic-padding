@@ -90,7 +90,7 @@ prompt_config() {
     while true; do
         # ─── 步骤 1: 网卡配置 ─────────────────────────────────────────
         echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
-        echo -e "${CYAN}|${NC}  ${BOLD}步骤 1/5${NC}  网卡配置                                         ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}  ${BOLD}步骤 1/6${NC}  网卡配置                                         ${CYAN}|${NC}"
         echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
         echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
 
@@ -127,7 +127,7 @@ prompt_config() {
 
         # ─── 步骤 2: 流量比例 ─────────────────────────────────────────
         echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
-        echo -e "${CYAN}|${NC}  ${BOLD}步骤 2/5${NC}  流量比例                                         ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}  ${BOLD}步骤 2/6${NC}  流量比例                                         ${CYAN}|${NC}"
         echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
         echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
         echo -e "${CYAN}|${NC}    ${CYAN}(a)${NC} 1:2 = 保守                                           ${CYAN}|${NC}"
@@ -149,7 +149,7 @@ prompt_config() {
 
         # ─── 步骤 3: 流量配额 ─────────────────────────────────────────
         echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
-        echo -e "${CYAN}|${NC}  ${BOLD}步骤 3/5${NC}  流量配额                                         ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}  ${BOLD}步骤 3/6${NC}  流量配额                                         ${CYAN}|${NC}"
         echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
         echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
         echo -ne "${CYAN}|${NC}  每日最大额外下载 (GB) [默认: 10]: "
@@ -168,7 +168,7 @@ prompt_config() {
 
         # ─── 步骤 4: 消息推送 ─────────────────────────────────────────
         echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
-        echo -e "${CYAN}|${NC}  ${BOLD}步骤 4/5${NC}  消息推送                                         ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}  ${BOLD}步骤 4/6${NC}  消息推送                                         ${CYAN}|${NC}"
         echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
         echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
         echo -ne "${CYAN}|${NC}  启用消息推送？(y/N) [默认: N]: "
@@ -373,9 +373,47 @@ prompt_config() {
 
         echo ""
 
-        # ─── 步骤 5: 管理命令 ─────────────────────────────────────────
+        # ─── 步骤 5: AI 分析 ─────────────────────────────────────────
         echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
-        echo -e "${CYAN}|${NC}  ${BOLD}步骤 5/5${NC}  基本设置                                         ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}  ${BOLD}步骤 5/6${NC}  AI 分析                                          ${CYAN}|${NC}"
+        echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
+        echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}  每小时自动分析流量数据，结果写入日报/周报                    ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}  支持 OpenAI 兼容接口（DeepSeek、OpenAI、本地模型等）         ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
+        echo -ne "${CYAN}|${NC}  启用 AI 分析？(y/N) [默认: N]: "
+        read enable_ai
+        AI_ENABLED="false"
+        AI_API_KEY=""
+        AI_BASE_URL="https://api.openai.com/v1"
+        AI_MODEL="gpt-4o-mini"
+
+        if [[ "${enable_ai,,}" == "y" ]]; then
+            AI_ENABLED="true"
+            echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
+            echo -ne "${CYAN}|${NC}  API Key: "
+            read AI_API_KEY
+            echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
+            echo -ne "${CYAN}|${NC}  API 地址 [默认: https://api.openai.com/v1]: "
+            read user_base_url
+            AI_BASE_URL="${user_base_url:-$AI_BASE_URL}"
+            echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
+            echo -ne "${CYAN}|${NC}  模型名 [默认: gpt-4o-mini]: "
+            read user_model
+            AI_MODEL="${user_model:-$AI_MODEL}"
+            echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
+            echo -e "${CYAN}|${NC}  ${DIM}💡 装完后可在菜单 [17] AI分析 中修改${NC}                    ${CYAN}|${NC}"
+        else
+            echo -e "${CYAN}|${NC}  ${DIM}跳过，装完后可在菜单 [17] 中开启${NC}                          ${CYAN}|${NC}"
+        fi
+        echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
+        echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
+
+        echo ""
+
+        # ─── 步骤 6: 管理命令 ─────────────────────────────────────────
+        echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
+        echo -e "${CYAN}|${NC}  ${BOLD}步骤 6/6${NC}  基本设置                                         ${CYAN}|${NC}"
         echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
         echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
         echo -ne "${CYAN}|${NC}  服务器名称 [默认: Realm中转服务器]: "
@@ -413,10 +451,15 @@ prompt_config() {
             printf "${CYAN}|${NC}    推送方式    ${YELLOW}%-46s${NC}${CYAN}|${NC}\n" "未启用"
         fi
         printf "${CYAN}|${NC}    管理命令    ${GREEN}%-46s${NC}${CYAN}|${NC}\n" "${CMD_NAME}"
+        if [[ "${AI_ENABLED}" == "true" ]]; then
+            printf "${CYAN}|${NC}    AI 分析     ${GREEN}%-46s${NC}${CYAN}|${NC}\n" "已开启 (${AI_MODEL})"
+        else
+            printf "${CYAN}|${NC}    AI 分析     ${YELLOW}%-46s${NC}${CYAN}|${NC}\n" "未启用"
+        fi
         echo -e "${CYAN}|${NC}                                                              ${CYAN}|${NC}"
         echo -e "${CYAN}+===============================================================================+══════════════════════════════════════════════════════════════╣${NC}"
         echo -e "${CYAN}|${NC}                                                              ${CYAN}|${NC}"
-        echo -e "${CYAN}|${NC}    ${GREEN}[Y]${NC} 确认安装      ${YELLOW}[1-5]${NC} 重新设置      ${RED}[N]${NC} 取消            ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}    ${GREEN}[Y]${NC} 确认安装      ${YELLOW}[1-6]${NC} 重新设置      ${RED}[N]${NC} 取消            ${CYAN}|${NC}"
         echo -e "${CYAN}|${NC}                                                              ${CYAN}|${NC}"
         echo -ne "${CYAN}|${NC}  请选择: "
         read confirm
@@ -424,7 +467,7 @@ prompt_config() {
 
         case "${confirm,,}" in
             y|"") return ;;
-            [1-5]) continue ;;
+            [1-6]) continue ;;
             n) log_warn "安装已取消"; exit 0 ;;
             *) continue ;;
         esac
@@ -1166,10 +1209,10 @@ defaults = {
     'alert_cooldown': 180,
     'alert_recovery': True,
     'csv_log_dir': '${CONFIG_DIR}/logs',
-    'ai_enabled': True,
-    'ai_api_key': 'ad9eef82782f75050b28f407026813735a5109db',
-    'ai_base_url': 'https://api-x4l639rbh7gdz1pa.aistudio-app.com/v1',
-    'ai_model': 'DeepSeek-R1-Distill-Llama-8B-F16',
+    'ai_enabled': False,
+    'ai_api_key': '',
+    'ai_base_url': 'https://api.openai.com/v1',
+    'ai_model': 'gpt-4o-mini',
 }
 
 try:
@@ -1933,10 +1976,10 @@ generate_config() {
     "alert_cooldown": 180,
     "alert_recovery": true,
     "csv_log_dir": "${CONFIG_DIR}/logs",
-    "ai_enabled": true,
-    "ai_api_key": "ad9eef82782f75050b28f407026813735a5109db",
-    "ai_base_url": "https://api-x4l639rbh7gdz1pa.aistudio-app.com/v1",
-    "ai_model": "DeepSeek-R1-Distill-Llama-8B-F16"
+    "ai_enabled": ${AI_ENABLED},
+    "ai_api_key": "${AI_API_KEY}",
+    "ai_base_url": "${AI_BASE_URL}",
+    "ai_model": "${AI_MODEL}"
 }
 EOF
     echo -e "${CYAN}|${NC}  ${GREEN}[✓]${NC} 配置: ${CONFIG_DIR}/config.json                               ${CYAN}|${NC}"

@@ -215,10 +215,10 @@ Traffic-Tadding/                   /opt/traffic-padding/
     "csv_log_dir": "/etc/traffic-padding/logs",  // CSV 日志目录
 
     // ── AI 分析 ──
-    "ai_enabled": true,               // 启用 AI 分析（每小时自动调用）
-    "ai_api_key": "your-api-key",     // DeepSeek API Key
-    "ai_base_url": "https://api-x4l639rbh7gdz1pa.aistudio-app.com/v1",  // API 地址
-    "ai_model": "DeepSeek-R1-Distill-Llama-8B-F16"  // 模型名称
+    "ai_enabled": false,              // 启用 AI 分析（每小时自动调用）
+    "ai_api_key": "",                 // API Key（安装时填写或菜单中配置）
+    "ai_base_url": "https://api.openai.com/v1",  // API 地址（OpenAI 兼容）
+    "ai_model": "gpt-4o-mini"        // 模型名称
 }
 ```
 
