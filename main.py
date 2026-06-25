@@ -2046,32 +2046,36 @@ class DingTalkNotifier(BaseNotifier):
             return False
 
     def _draw_traffic_chart(self, service: 'TrafficPaddingService') -> str:
-        """生成流量柱状图"""
+        """生成竖向流量柱状图（适配钉钉窄屏）"""
         summary = service.get_traffic_summary(self.report_freq, self.report_align, self.report_hour)
         if not summary or (summary['rx_mb'] == 0 and summary['tx_mb'] == 0 and summary['download_mb'] == 0):
             return ""
 
         max_val = max(summary['rx_mb'], summary['tx_mb'], summary['download_mb'], 1)
+        height = 8  # 柱子高度（行数）
 
-        def draw_bar(label, value, width=30):
-            filled = int((value / max_val) * width) if max_val > 0 else 0
-            bar = '█' * filled + '░' * (width - filled)
-            return f"  {label:12s} {bar}  {value:>8.1f} MB"
+        # 计算每根柱子的填充行数
+        tx_h = int((summary['tx_mb'] / max_val) * height) if max_val > 0 else 0
+        rx_h = int((summary['rx_mb'] / max_val) * height) if max_val > 0 else 0
+        dl_h = int((summary['download_mb'] / max_val) * height) if max_val > 0 else 0
 
-        return f"""
-### 📊 流量柱状图 ({summary['label']})
+        lines = []
+        lines.append(f"### 📊 流量柱状图 ({summary['label']})")
+        lines.append("")
+        lines.append("```")
+        # 从上到下画
+        for row in range(height, 0, -1):
+            tx_block = " ██ " if row <= tx_h else "    "
+            rx_block = " ██ " if row <= rx_h else "    "
+            dl_block = " ██ " if row <= dl_h else "    "
+            lines.append(f"  {tx_block} {rx_block} {dl_block}")
+        # 底部标签
+        lines.append(" ┌────┬────┬────┐")
+        lines.append("  TX   RX  填充")
+        lines.append(f" {summary['tx_mb']:.0f}  {summary['rx_mb']:.0f}  {summary['download_mb']:.0f} MB")
+        lines.append("```")
 
-```
-┌─────────────────────────────────────────────────────┐
-│                                                     │
-{draw_bar('上行 (TX)', summary['tx_mb'])}   │
-│                                                     │
-{draw_bar('下行 (RX)', summary['rx_mb'])}   │
-│                                                     │
-{draw_bar('填充下载', summary['download_mb'])}   │
-│                                                     │
-└─────────────────────────────────────────────────────┘
-```"""
+        return "\n".join(lines)
 
     def build_report(self, service: 'TrafficPaddingService') -> str:
         d = self._collect_report_data(service)
