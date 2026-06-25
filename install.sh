@@ -662,8 +662,9 @@ print(c.get('tg_report_hour', c.get('dingtalk_report_hour', 23)))
         printf "${CYAN}|${NC}    ${CYAN}[5]${NC} 推送方式    ${GREEN}%-40s${NC}${CYAN}|${NC}\n" "${push_status}"
         printf "${CYAN}|${NC}    ${CYAN}[6]${NC} 报告频率    ${GREEN}%-40s${NC}${CYAN}|${NC}\n" "${freq_label}"
         printf "${CYAN}|${NC}    ${CYAN}[7]${NC} 推送时间    ${GREEN}%-40s${NC}${CYAN}|${NC}\n" "每日 ${hour}:00"
+        echo -e "${CYAN}|${NC}    ${CYAN}[8]${NC} 通知管理                                                         ${CYAN}|${NC}"
         echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
-        echo -e "${CYAN}|${NC}    ${CYAN}[8]${NC} 打开编辑器（高级）                                      ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}    ${CYAN}[9]${NC} 打开编辑器（高级）                                      ${CYAN}|${NC}"
         echo -e "${CYAN}|${NC}    ${CYAN}[0]${NC} 返回                                                        ${CYAN}|${NC}"
         echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
         echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
@@ -840,6 +841,81 @@ with open('${CONFIG_DIR}/config.json', 'w') as f:
                 fi
                 ;;
             8)
+                # 通知管理
+                while true; do
+                    echo ""
+                    local notify_info=$(python3 -c "
+import json, os
+nf = os.path.join('${CONFIG_DIR}', 'notify.json')
+defaults = {'report_daily':True,'report_weekly':True,'report_monthly':True,'bandwidth_alert':True,'bandwidth_alert_recovery':True,'qos_alert':True,'service_start_stop':True,'first_test':True}
+try:
+    with open(nf) as f: n = json.load(f)
+    defaults.update(n)
+except: pass
+for k in ['report_daily','report_monthly','bandwidth_alert','bandwidth_alert_recovery','qos_alert','service_start_stop','first_test']:
+    print('已开启' if defaults.get(k,True) else '已关闭')
+" 2>/dev/null)
+                    local n_daily=$(echo "$notify_info" | sed -n '1p')
+                    local n_monthly=$(echo "$notify_info" | sed -n '2p')
+                    local n_alert=$(echo "$notify_info" | sed -n '3p')
+                    local n_recovery=$(echo "$notify_info" | sed -n '4p')
+                    local n_qos=$(echo "$notify_info" | sed -n '5p')
+                    local n_startstop=$(echo "$notify_info" | sed -n '6p')
+                    local n_first=$(echo "$notify_info" | sed -n '7p')
+
+                    echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
+                    echo -e "${CYAN}|${NC}  ${BOLD}通知管理${NC}                                                      ${CYAN}|${NC}"
+                    echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
+                    printf "${CYAN}|${NC}    ${CYAN}[1]${NC} 日报推送        ${GREEN}%-12s${NC}  含带宽+填充数据        ${CYAN}|${NC}\n" "$n_daily"
+                    printf "${CYAN}|${NC}    ${CYAN}[2]${NC} 周报推送        ${GREEN}%-12s${NC}  发送后清理CSV          ${CYAN}|${NC}\n" "$n_daily"
+                    printf "${CYAN}|${NC}    ${CYAN}[3]${NC} 月报推送        ${GREEN}%-12s${NC}                            ${CYAN}|${NC}\n" "$n_monthly"
+                    printf "${CYAN}|${NC}    ${CYAN}[4]${NC} 带宽告警        ${GREEN}%-12s${NC}  阈值推送钉钉          ${CYAN}|${NC}\n" "$n_alert"
+                    printf "${CYAN}|${NC}    ${CYAN}[5]${NC} 告警恢复通知    ${GREEN}%-12s${NC}                            ${CYAN}|${NC}\n" "$n_recovery"
+                    printf "${CYAN}|${NC}    ${CYAN}[6]${NC} QoS 告警        ${GREEN}%-12s${NC}  跨境网络拥堵          ${CYAN}|${NC}\n" "$n_qos"
+                    printf "${CYAN}|${NC}    ${CYAN}[7]${NC} 启停通知        ${GREEN}%-12s${NC}  服务启动/停止          ${CYAN}|${NC}\n" "$n_startstop"
+                    printf "${CYAN}|${NC}    ${CYAN}[8]${NC} 首次测试消息    ${GREEN}%-12s${NC}                            ${CYAN}|${NC}\n" "$n_first"
+                    echo -e "${CYAN}|${NC}    ${CYAN}[0]${NC} 返回                                                    ${CYAN}|${NC}"
+                    echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
+                    echo ""
+                    echo -ne "  请选择 [0-8]: "
+                    read n_choice
+
+                    case "$n_choice" in
+                        [1-8])
+                            local keys=("report_daily" "report_weekly" "report_monthly" "bandwidth_alert" "bandwidth_alert_recovery" "qos_alert" "service_start_stop" "first_test")
+                            local idx=$((n_choice - 1))
+                            local key="${keys[$idx]}"
+                            local current=$(python3 -c "
+import json, os
+nf = os.path.join('${CONFIG_DIR}', 'notify.json')
+try:
+    with open(nf) as f: n = json.load(f)
+except: n = {}
+print('on' if n.get('${key}', True) else 'off')
+" 2>/dev/null)
+                            echo -ne "  当前状态: $([ "$current" == "on" ] && echo "已开启" || echo "已关闭")  切换为？(y=开启/n=关闭): "
+                            read toggle
+                            python3 -c "
+import json, os
+nf = os.path.join('${CONFIG_DIR}', 'notify.json')
+try:
+    with open(nf) as f: n = json.load(f)
+except: n = {}
+n['${key}'] = $([ "${toggle,,}" == "y" ] && echo "True" || echo "False")
+with open(nf, 'w') as f: json.dump(n, f, indent=2, ensure_ascii=False)
+" 2>/dev/null
+                            log_info "已更新通知设置"
+                            ;;
+                        0)
+                            break
+                            ;;
+                        *)
+                            echo -e "  ${RED}无效选项${NC}"
+                            ;;
+                    esac
+                done
+                ;;
+            9)
                 ${EDITOR:-nano} "${CONFIG_DIR}/config.json"
                 ;;
             0)
@@ -851,6 +927,22 @@ with open('${CONFIG_DIR}/config.json', 'w') as f:
 
 get_auto_panel_status() {
     if grep -q "tpm$" ~/.bashrc 2>/dev/null; then
+        echo -e "${GREEN}已开启${NC}"
+    else
+        echo -e "${DIM}已关闭${NC}"
+    fi
+}
+
+get_ai_status() {
+    local status=$(python3 -c "
+import json
+try:
+    c = json.load(open('${CONFIG_DIR}/config.json'))
+    print('on' if c.get('ai_enabled', True) else 'off')
+except:
+    print('on')
+" 2>/dev/null)
+    if [[ "$status" == "on" ]]; then
         echo -e "${GREEN}已开启${NC}"
     else
         echo -e "${DIM}已关闭${NC}"
@@ -1060,6 +1152,46 @@ PYEOF
     done
 }
 
+# 合并新配置字段到现有 config.json（不覆盖用户已改的值）
+merge_config_fields() {
+    python3 -c "
+import json, os
+
+config_file = '${CONFIG_DIR}/config.json'
+defaults = {
+    'monitor_enabled': True,
+    'alert_enabled': False,
+    'alert_threshold_mbps': 50,
+    'alert_cooldown': 180,
+    'alert_recovery': True,
+    'csv_log_dir': '${CONFIG_DIR}/logs',
+    'ai_enabled': True,
+    'ai_api_key': 'ad9eef82782f75050b28f407026813735a5109db',
+    'ai_base_url': 'https://api-x4l639rbh7gdz1pa.aistudio-app.com/v1',
+    'ai_model': 'DeepSeek-R1-Distill-Llama-8B-F16',
+}
+
+try:
+    with open(config_file, 'r') as f:
+        config = json.load(f)
+except:
+    config = {}
+
+changed = False
+for key, val in defaults.items():
+    if key not in config:
+        config[key] = val
+        changed = True
+
+if changed:
+    with open(config_file, 'w') as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+    print('  配置已合并新增字段')
+else:
+    print('  配置无需更新')
+" 2>/dev/null
+}
+
 do_update() {
     echo ""
     echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
@@ -1106,6 +1238,11 @@ do_update() {
     echo -ne "  更新 main.py..."
     mv /tmp/main.py.new "${INSTALL_DIR}/main.py"
     chmod 755 "${INSTALL_DIR}/main.py"
+    echo -e " ${GREEN}✓${NC}"
+
+    # 合并新配置字段
+    echo -ne "  合并配置..."
+    merge_config_fields
     echo -e " ${GREEN}✓${NC}"
 
     echo -ne "  更新管理脚本..."
@@ -1161,11 +1298,9 @@ main() {
         echo -e "${CYAN}+--------------------------------------+------------------------------------+${NC}"
         echo -e "${CYAN}|${NC}  ${BOLD}系统管理${NC}                                                                ${CYAN}|${NC}"
         echo -e "${CYAN}+===========================================================================+${NC}"
-        echo -e "${CYAN}|${NC}  ${CYAN}[9]${NC} 编辑配置     ${CYAN}[10]${NC} 开机自启     ${CYAN}[11]${NC} 取消自启                      ${CYAN}|${NC}"
-        echo -e "${CYAN}|${NC}  ${CYAN}[12]${NC} 网卡测试     ${RED}[13]${NC} 卸载         ${GREEN}[14]${NC} 一键更新                      ${CYAN}|${NC}"
-        echo -e "${CYAN}|${NC}  ${YELLOW}[15]${NC} 自动面板: $(get_auto_panel_status)                                                   ${CYAN}|${NC}"
-        echo -e "${CYAN}|${NC}  ${GREEN}[16]${NC} 流量监控                                                               ${CYAN}|${NC}"
-        echo -e "${CYAN}|${NC}  ${MAGENTA}[17]${NC} 下载模式: $(get_download_mode)                                                ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}  ${CYAN}[9]${NC} 编辑配置     ${CYAN}[10]${NC} 开机自启     ${GREEN}[11]${NC} 网卡与下载                      ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}  ${RED}[12]${NC} 卸载         ${GREEN}[13]${NC} 一键更新     ${YELLOW}[14]${NC} 自动面板: $(get_auto_panel_status)       ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}  ${GREEN}[15]${NC} 流量与带宽   ${GREEN}[16]${NC} 告警设置     ${GREEN}[17]${NC} AI分析: $(get_ai_status)              ${CYAN}|${NC}"
         echo -e "${CYAN}+===========================================================================+${NC}"
         echo -e "${CYAN}|${NC}  ${CYAN}[0]${NC} 退出                                                                    ${CYAN}|${NC}"
         echo -e "${CYAN}+===========================================================================+${NC}"
@@ -1294,33 +1429,110 @@ with open('${CONFIG_DIR}/config.json') as f:
                 need_root && do_edit_config
                 ;;
             10)
-                need_root && systemctl enable "${SERVICE_NAME}" && log_info "已启用开机自启"
-                wait_key
-                ;;
-            11)
-                need_root && systemctl disable "${SERVICE_NAME}" && log_info "已取消开机自启"
-                wait_key
-                ;;
-            12)
-                echo ""
-                local iface=$(python3 -c "import json;print(json.load(open('${CONFIG_DIR}/config.json')).get('interface','eth0'))" 2>/dev/null || echo 'eth0')
-                if grep -q "${iface}:" /proc/net/dev 2>/dev/null; then
-                    log_info "网卡 ${iface} 存在"
+                # 开机自启（toggle）
+                local boot_status=$(systemctl is-enabled "${SERVICE_NAME}" 2>/dev/null)
+                if [[ "$boot_status" == "enabled" ]]; then
                     echo ""
-                    cat /proc/net/dev | head -3
-                    grep "${iface}:" /proc/net/dev
+                    echo -e "  当前状态: ${GREEN}已启用${NC}"
+                    echo -ne "  是否关闭开机自启？(y/N): "
+                    read toggle
+                    if [[ "${toggle,,}" == "y" ]]; then
+                        need_root && systemctl disable "${SERVICE_NAME}" && log_info "已取消开机自启"
+                    fi
                 else
-                    echo -e "  ${RED}[✗]${NC} 网卡 ${iface} 不存在"
+                    echo ""
+                    echo -e "  当前状态: ${YELLOW}未启用${NC}"
+                    echo -ne "  是否开启开机自启？(y/N): "
+                    read toggle
+                    if [[ "${toggle,,}" == "y" ]]; then
+                        need_root && systemctl enable "${SERVICE_NAME}" && log_info "已启用开机自启"
+                    fi
                 fi
                 wait_key
                 ;;
-            13)
+            11)
+                # 网卡与下载子菜单
+                while true; do
+                    echo ""
+                    echo -e "${CYAN}+===========================================================================+${NC}"
+                    printf "${CYAN}|${NC}  ${BOLD}%-69s${NC}${CYAN}|${NC}\n" "网卡与下载"
+                    echo -e "${CYAN}+---------------------------------------------------------------------------+${NC}"
+                    echo -e "${CYAN}|${NC}  ${CYAN}[1]${NC} 网卡测试                                                          ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}  ${CYAN}[2]${NC} 下载模式                                                          ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}  ${CYAN}[0]${NC} 返回                                                              ${CYAN}|${NC}"
+                    echo -e "${CYAN}+===========================================================================+${NC}"
+                    echo ""
+                    echo -ne "  请选择 [0-2]: "
+                    read nd_choice
+
+                    case "$nd_choice" in
+                        1)
+                            echo ""
+                            local iface=$(python3 -c "import json;print(json.load(open('${CONFIG_DIR}/config.json')).get('interface','eth0'))" 2>/dev/null || echo 'eth0')
+                            if grep -q "${iface}:" /proc/net/dev 2>/dev/null; then
+                                log_info "网卡 ${iface} 存在"
+                                echo ""
+                                cat /proc/net/dev | head -3
+                                grep "${iface}:" /proc/net/dev
+                            else
+                                echo -e "  ${RED}[✗]${NC} 网卡 ${iface} 不存在"
+                            fi
+                            wait_key
+                            ;;
+                        2)
+                            echo ""
+                            echo -e "${CYAN}+===========================================================================+${NC}"
+                            printf "${CYAN}|${NC}  ${BOLD}%-69s${NC}${CYAN}|${NC}\n" "下载模式切换"
+                            echo -e "${CYAN}+===========================================================================+${NC}"
+                            echo -e "${CYAN}|${NC}                                                                    ${CYAN}|${NC}"
+                            echo -e "${CYAN}|${NC}    ${GREEN}(a)${NC} 短时模式    下载 2-15MB，快速完成                              ${CYAN}|${NC}"
+                            echo -e "${CYAN}|${NC}    ${YELLOW}(b)${NC} 长时模式    下载完整文件，持续 1-5 分钟                        ${CYAN}|${NC}"
+                            echo -e "${CYAN}|${NC}    ${CYAN}(c)${NC} 长短结合    交替使用两种模式                                  ${CYAN}|${NC}"
+                            echo -e "${CYAN}|${NC}                                                                    ${CYAN}|${NC}"
+                            echo -e "${CYAN}|${NC}  ${DIM}短时模式：更隐蔽，流量可控${NC}                                          ${CYAN}|${NC}"
+                            echo -e "${CYAN}|${NC}  ${DIM}长时模式：更真实，像人类下载${NC}                                        ${CYAN}|${NC}"
+                            echo -e "${CYAN}|${NC}  ${DIM}长短结合：随机切换，兼顾隐蔽和真实${NC}                                  ${CYAN}|${NC}"
+                            echo -e "${CYAN}|${NC}                                                                    ${CYAN}|${NC}"
+                            echo -e "${CYAN}+===========================================================================+${NC}"
+                            echo ""
+                            echo -ne "  请选择 (a/b/c): "
+                            read mode_choice
+                            case "${mode_choice,,}" in
+                                a)
+                                    set_download_mode "short"
+                                    log_info "已切换到短时模式"
+                                    ;;
+                                b)
+                                    set_download_mode "long"
+                                    log_info "已切换到长时模式"
+                                    ;;
+                                c)
+                                    set_download_mode "mixed"
+                                    log_info "已切换到长短结合模式"
+                                    ;;
+                                *)
+                                    echo -e "  ${RED}无效选项${NC}"
+                                    ;;
+                            esac
+                            wait_key
+                            ;;
+                        0)
+                            break
+                            ;;
+                        *)
+                            echo -e "  ${RED}无效选项${NC}"
+                            sleep 1
+                            ;;
+                    esac
+                done
+                ;;
+            12)
                 need_root && do_uninstall
                 ;;
-            14)
+            13)
                 need_root && do_update
                 ;;
-            15)
+            14)
                 echo ""
                 if grep -q "tpm$" ~/.bashrc 2>/dev/null; then
                     sed -i '/tpm$/d' ~/.bashrc
@@ -1332,45 +1544,320 @@ with open('${CONFIG_DIR}/config.json') as f:
                 fi
                 wait_key
                 ;;
+            15)
+                # 流量与带宽子菜单
+                while true; do
+                    echo ""
+                    local mon_status="${RED}已关闭${NC}"
+                    python3 -c "import json;c=json.load(open('${CONFIG_DIR}/config.json'));print('on' if c.get('monitor_enabled',True) else 'off')" 2>/dev/null | grep -q on && mon_status="${GREEN}已开启${NC}"
+
+                    echo -e "${CYAN}+===========================================================================+${NC}"
+                    printf "${CYAN}|${NC}  ${BOLD}%-69s${NC}${CYAN}|${NC}\n" "流量与带宽"
+                    echo -e "${CYAN}+---------------------------------------------------------------------------+${NC}"
+                    printf "${CYAN}|${NC}  带宽监控: ${mon_status}                                                           ${CYAN}|${NC}"
+                    echo -e "${CYAN}+---------------------------------------------------------------------------+${NC}"
+                    echo -e "${CYAN}|${NC}  ${CYAN}[1]${NC} 流量柱状图（填充数据）                                          ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}  ${CYAN}[2]${NC} 开启/关闭带宽监控                                               ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}  ${CYAN}[3]${NC} 实时带宽                                                          ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}  ${CYAN}[4]${NC} 今日统计                                                          ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}  ${CYAN}[0]${NC} 返回                                                              ${CYAN}|${NC}"
+                    echo -e "${CYAN}+===========================================================================+${NC}"
+                    echo ""
+                    echo -ne "  请选择 [0-4]: "
+                    read fb_choice
+
+                    case "$fb_choice" in
+                        1)
+                            do_traffic_monitor
+                            ;;
+                        2)
+                            python3 -c "
+import json
+with open('${CONFIG_DIR}/config.json') as f: c=json.load(f)
+c['monitor_enabled'] = not c.get('monitor_enabled', True)
+with open('${CONFIG_DIR}/config.json','w') as f: json.dump(c,f,indent=2,ensure_ascii=False)
+print('已开启' if c['monitor_enabled'] else '已关闭')
+" 2>/dev/null
+                            log_info "带宽监控已切换，重启服务后生效"
+                            wait_key
+                            ;;
+                        3)
+                            python3 -c "
+import json, os
+csv_dir = json.load(open('${CONFIG_DIR}/config.json')).get('csv_log_dir','${CONFIG_DIR}/logs')
+from datetime import datetime
+csv_file = os.path.join(csv_dir, f\"bandwidth_{datetime.now().strftime('%Y%m%d')}.csv\")
+if not os.path.exists(csv_file):
+    print('  暂无今日数据')
+else:
+    with open(csv_file) as f: lines = f.readlines()
+    if len(lines) <= 1:
+        print('  暂无数据')
+    else:
+        last = lines[-1].strip().split(',')
+        print(f'  最新采样 ({last[0]})')
+        print(f'  入站峰值: {float(last[1]):.1f} Mbps')
+        print(f'  出站峰值: {float(last[2]):.1f} Mbps')
+        print(f'  入站均值: {float(last[4]):.1f} Mbps')
+        print(f'  出站均值: {float(last[5]):.1f} Mbps')
+        print(f'  采样数: {last[7]}')
+" 2>/dev/null
+                            wait_key
+                            ;;
+                        4)
+                            python3 -c "
+import json, os
+csv_dir = json.load(open('${CONFIG_DIR}/config.json')).get('csv_log_dir','${CONFIG_DIR}/logs')
+from datetime import datetime
+csv_file = os.path.join(csv_dir, f\"bandwidth_{datetime.now().strftime('%Y%m%d')}.csv\")
+if not os.path.exists(csv_file):
+    print('  暂无今日数据')
+else:
+    with open(csv_file) as f: lines = f.readlines()
+    if len(lines) <= 1:
+        print('  暂无数据')
+    else:
+        rx_peaks, tx_peaks, rx_avgs, tx_avgs = [], [], [], []
+        for line in lines[1:]:
+            p = line.strip().split(',')
+            if len(p) >= 7:
+                rx_peaks.append(float(p[1]))
+                tx_peaks.append(float(p[2]))
+                rx_avgs.append(float(p[4]))
+                tx_avgs.append(float(p[5]))
+        print(f'  统计: {len(rx_peaks)} 分钟')
+        print(f'  入站峰值: {max(rx_peaks):.1f} Mbps')
+        print(f'  出站峰值: {max(tx_peaks):.1f} Mbps')
+        print(f'  入站均值: {sum(rx_avgs)/len(rx_avgs):.1f} Mbps')
+        print(f'  出站均值: {sum(tx_avgs)/len(tx_avgs):.1f} Mbps')
+" 2>/dev/null
+                            wait_key
+                            ;;
+                        0)
+                            break
+                            ;;
+                        *)
+                            echo -e "  ${RED}无效选项${NC}"
+                            sleep 1
+                            ;;
+                    esac
+                done
+                ;;
             16)
-                do_traffic_monitor
+                # 告警设置
+                while true; do
+                    echo ""
+                    local alert_info=$(python3 -c "
+import json
+c = json.load(open('${CONFIG_DIR}/config.json'))
+print('已开启' if c.get('alert_enabled',False) else '已关闭')
+print(str(c.get('alert_threshold_mbps', 50)))
+print(str(c.get('alert_cooldown', 180)))
+print('已开启' if c.get('alert_recovery',True) else '已关闭')
+" 2>/dev/null)
+                    local a_enabled=$(echo "$alert_info" | sed -n '1p')
+                    local a_threshold=$(echo "$alert_info" | sed -n '2p')
+                    local a_cooldown=$(echo "$alert_info" | sed -n '3p')
+                    local a_recovery=$(echo "$alert_info" | sed -n '4p')
+
+                    echo -e "${CYAN}+===========================================================================+${NC}"
+                    printf "${CYAN}|${NC}  ${BOLD}%-69s${NC}${CYAN}|${NC}\n" "告警设置"
+                    echo -e "${CYAN}+---------------------------------------------------------------------------+${NC}"
+                    printf "${CYAN}|${NC}  ${CYAN}[1]${NC} 带宽告警    ${GREEN}%-10s${NC}  阈值: %-5s Mbps                       ${CYAN}|${NC}\n" "$a_enabled" "$a_threshold"
+                    printf "${CYAN}|${NC}  ${CYAN}[2]${NC} 告警恢复    ${GREEN}%-10s${NC}  冷却: %-5s 秒                         ${CYAN}|${NC}\n" "$a_recovery" "$a_cooldown"
+                    echo -e "${CYAN}|${NC}  ${CYAN}[0]${NC} 返回                                                              ${CYAN}|${NC}"
+                    echo -e "${CYAN}+===========================================================================+${NC}"
+                    echo ""
+                    echo -ne "  请选择 [0-2]: "
+                    read alert_choice
+
+                    case "$alert_choice" in
+                        1)
+                            echo -ne "  开启或关闭带宽告警？(当前: ${a_enabled}) [y/n]: "
+                            read toggle
+                            if [[ "${toggle,,}" == "y" ]]; then
+                                echo -ne "  告警阈值 (Mbps) [当前: ${a_threshold}]: "
+                                read new_threshold
+                                python3 -c "
+import json
+with open('${CONFIG_DIR}/config.json') as f: c=json.load(f)
+c['alert_enabled'] = True
+c['alert_threshold_mbps'] = ${new_threshold:-$a_threshold}
+with open('${CONFIG_DIR}/config.json','w') as f: json.dump(c,f,indent=2,ensure_ascii=False)
+" 2>/dev/null
+                                log_info "带宽告警已开启"
+                            elif [[ "${toggle,,}" == "n" ]]; then
+                                python3 -c "
+import json
+with open('${CONFIG_DIR}/config.json') as f: c=json.load(f)
+c['alert_enabled'] = False
+with open('${CONFIG_DIR}/config.json','w') as f: json.dump(c,f,indent=2,ensure_ascii=False)
+" 2>/dev/null
+                                log_info "带宽告警已关闭"
+                            fi
+                            ;;
+                        2)
+                            echo -ne "  开启或关闭告警恢复通知？(当前: ${a_recovery}) [y/n]: "
+                            read toggle
+                            if [[ "${toggle,,}" == "y" ]]; then
+                                echo -ne "  冷却时间 (秒) [当前: ${a_cooldown}]: "
+                                read new_cooldown
+                                python3 -c "
+import json
+with open('${CONFIG_DIR}/config.json') as f: c=json.load(f)
+c['alert_recovery'] = True
+c['alert_cooldown'] = ${new_cooldown:-$a_cooldown}
+with open('${CONFIG_DIR}/config.json','w') as f: json.dump(c,f,indent=2,ensure_ascii=False)
+" 2>/dev/null
+                                log_info "告警恢复通知已开启"
+                            elif [[ "${toggle,,}" == "n" ]]; then
+                                python3 -c "
+import json
+with open('${CONFIG_DIR}/config.json') as f: c=json.load(f)
+c['alert_recovery'] = False
+with open('${CONFIG_DIR}/config.json','w') as f: json.dump(c,f,indent=2,ensure_ascii=False)
+" 2>/dev/null
+                                log_info "告警恢复通知已关闭"
+                            fi
+                            ;;
+                        0)
+                            break
+                            ;;
+                        *)
+                            echo -e "  ${RED}无效选项${NC}"
+                            sleep 1
+                            ;;
+                    esac
+                done
                 ;;
             17)
-                echo ""
-                echo -e "${CYAN}+===========================================================================+${NC}"
-                printf "${CYAN}|${NC}  ${BOLD}%-69s${NC}${CYAN}|${NC}\n" "下载模式切换"
-                echo -e "${CYAN}+===========================================================================+${NC}"
-                echo -e "${CYAN}|${NC}                                                                    ${CYAN}|${NC}"
-                echo -e "${CYAN}|${NC}    ${GREEN}(a)${NC} 短时模式    下载 2-15MB，快速完成                              ${CYAN}|${NC}"
-                echo -e "${CYAN}|${NC}    ${YELLOW}(b)${NC} 长时模式    下载完整文件，持续 1-5 分钟                        ${CYAN}|${NC}"
-                echo -e "${CYAN}|${NC}    ${CYAN}(c)${NC} 长短结合    交替使用两种模式                                  ${CYAN}|${NC}"
-                echo -e "${CYAN}|${NC}                                                                    ${CYAN}|${NC}"
-                echo -e "${CYAN}|${NC}  ${DIM}短时模式：更隐蔽，流量可控${NC}                                          ${CYAN}|${NC}"
-                echo -e "${CYAN}|${NC}  ${DIM}长时模式：更真实，像人类下载${NC}                                        ${CYAN}|${NC}"
-                echo -e "${CYAN}|${NC}  ${DIM}长短结合：随机切换，兼顾隐蔽和真实${NC}                                  ${CYAN}|${NC}"
-                echo -e "${CYAN}|${NC}                                                                    ${CYAN}|${NC}"
-                echo -e "${CYAN}+===========================================================================+${NC}"
-                echo ""
-                echo -ne "  请选择 (a/b/c): "
-                read mode_choice
-                case "${mode_choice,,}" in
-                    a)
-                        set_download_mode "short"
-                        log_info "已切换到短时模式"
-                        ;;
-                    b)
-                        set_download_mode "long"
-                        log_info "已切换到长时模式"
-                        ;;
-                    c)
-                        set_download_mode "mixed"
-                        log_info "已切换到长短结合模式"
-                        ;;
-                    *)
-                        echo -e "  ${RED}无效选项${NC}"
-                        ;;
-                esac
-                wait_key
+                # AI分析子菜单
+                while true; do
+                    echo ""
+                    local ai_status=$(python3 -c "
+import json
+try:
+    c = json.load(open('${CONFIG_DIR}/config.json'))
+    print('on' if c.get('ai_enabled', True) else 'off')
+except:
+    print('on')
+" 2>/dev/null)
+                    local ai_display="${DIM}已关闭${NC}"
+                    [[ "$ai_status" == "on" ]] && ai_display="${GREEN}已开启${NC}"
+
+                    # 获取最近分析时间
+                    local ai_time=$(python3 -c "
+import json, os, time
+f = '${CONFIG_DIR}/ai_analysis.json'
+if os.path.exists(f):
+    d = json.load(open(f))
+    ts = d.get('timestamp', 0)
+    if ts > 0:
+        mins = int((time.time() - ts) / 60)
+        if mins < 60: print(f'{mins} 分钟前')
+        else: print(f'{mins // 60} 小时 {mins % 60} 分钟前')
+    else: print('无记录')
+else: print('无记录')
+" 2>/dev/null)
+
+                    echo -e "${CYAN}+===========================================================================+${NC}"
+                    printf "${CYAN}|${NC}  ${BOLD}%-69s${NC}${CYAN}|${NC}\n" "AI 分析"
+                    echo -e "${CYAN}+---------------------------------------------------------------------------+${NC}"
+                    printf "${CYAN}|${NC}  状态: ${ai_display}   上次分析: ${ai_time}                        ${CYAN}|${NC}"
+                    echo -e "${CYAN}+---------------------------------------------------------------------------+${NC}"
+                    echo -e "${CYAN}|${NC}  ${CYAN}[1]${NC} 开启/关闭                                                          ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}  ${CYAN}[2]${NC} 立即分析（不影响定时任务）                                          ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}  ${CYAN}[3]${NC} 查看最近分析结果                                                    ${CYAN}|${NC}"
+                    echo -e "${CYAN}|${NC}  ${CYAN}[0]${NC} 返回                                                              ${CYAN}|${NC}"
+                    echo -e "${CYAN}+===========================================================================+${NC}"
+                    echo ""
+                    echo -ne "  请选择 [0-3]: "
+                    read ai_choice
+
+                    case "$ai_choice" in
+                        1)
+                            if [[ "$ai_status" == "on" ]]; then
+                                python3 -c "
+import json
+with open('${CONFIG_DIR}/config.json') as f: c=json.load(f)
+c['ai_enabled'] = False
+with open('${CONFIG_DIR}/config.json','w') as f: json.dump(c,f,indent=2,ensure_ascii=False)
+" 2>/dev/null
+                                log_info "AI 分析已关闭"
+                            else
+                                python3 -c "
+import json
+with open('${CONFIG_DIR}/config.json') as f: c=json.load(f)
+c['ai_enabled'] = True
+with open('${CONFIG_DIR}/config.json','w') as f: json.dump(c,f,indent=2,ensure_ascii=False)
+" 2>/dev/null
+                                log_info "AI 分析已开启"
+                            fi
+                            ;;
+                        2)
+                            if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
+                                log_step "正在触发 AI 分析..."
+                                # 通过 SIGUSR2 信号触发手动分析
+                                systemctl kill -s SIGUSR2 "${SERVICE_NAME}" 2>/dev/null
+                                echo ""
+                                log_info "已发送分析请求，请稍候..."
+                                # 等待结果
+                                local wait_count=0
+                                while [[ $wait_count -lt 30 ]]; do
+                                    sleep 2
+                                    wait_count=$((wait_count + 1))
+                                    local new_time=$(python3 -c "
+import json, os, time
+f = '${CONFIG_DIR}/ai_analysis.json'
+if os.path.exists(f):
+    d = json.load(open(f))
+    ts = d.get('timestamp', 0)
+    if ts > 0 and (time.time() - ts) < 120:
+        print('done')
+    else:
+        print('wait')
+else:
+    print('wait')
+" 2>/dev/null)
+                                    if [[ "$new_time" == "done" ]]; then
+                                        log_info "分析完成！"
+                                        break
+                                    fi
+                                done
+                                if [[ $wait_count -ge 30 ]]; then
+                                    echo -e "  ${YELLOW}分析超时（可能模型响应较慢），结果将在后台保存${NC}"
+                                fi
+                            else
+                                echo ""
+                                echo -e "  ${RED}[✗]${NC} 服务未运行，请先启动服务"
+                            fi
+                            ;;
+                        3)
+                            echo ""
+                            python3 -c "
+import json, os
+f = '${CONFIG_DIR}/ai_analysis.json'
+if os.path.exists(f):
+    d = json.load(open(f))
+    analysis = d.get('analysis', '')
+    if analysis:
+        print(analysis)
+    else:
+        print('  暂无分析结果')
+else:
+    print('  暂无分析结果')
+" 2>/dev/null
+                            ;;
+                        0)
+                            break
+                            ;;
+                        *)
+                            echo -e "  ${RED}无效选项${NC}"
+                            sleep 1
+                            ;;
+                    esac
+                    [[ "$ai_choice" != "0" ]] && wait_key
+                done
                 ;;
             0)
                 clear
@@ -1437,7 +1924,17 @@ generate_config() {
     "qos_probe_enabled": true,
     "qos_probe_targets": ["https://cn.bing.com", "https://www.baidu.com", "https://cdn.aliyundcdntest.com/test_1m", "https://dl.google.com", "https://www.apple.com"],
     "qos_probe_count": 5,
-    "download_mode": "short"
+    "download_mode": "short",
+    "monitor_enabled": true,
+    "alert_enabled": false,
+    "alert_threshold_mbps": 50,
+    "alert_cooldown": 180,
+    "alert_recovery": true,
+    "csv_log_dir": "${CONFIG_DIR}/logs",
+    "ai_enabled": true,
+    "ai_api_key": "ad9eef82782f75050b28f407026813735a5109db",
+    "ai_base_url": "https://api-x4l639rbh7gdz1pa.aistudio-app.com/v1",
+    "ai_model": "DeepSeek-R1-Distill-Llama-8B-F16"
 }
 EOF
     echo -e "${CYAN}|${NC}  ${GREEN}[✓]${NC} 配置: ${CONFIG_DIR}/config.json                               ${CYAN}|${NC}"

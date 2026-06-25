@@ -14,6 +14,7 @@ import signal
 import struct
 import sys
 import syslog
+import threading
 import time
 import urllib.request
 import urllib.error
@@ -147,6 +148,586 @@ def calculate_counter_delta(prev: int, curr: int, max_val: int) -> int:
 
 
 # ============================================================================
+# 带宽监控（独立线程，1秒采样，1分钟写CSV，实时告警）
+# ============================================================================
+
+class BandwidthMonitor:
+    """后台线程：每秒采样网卡带宽，每分钟写CSV，触发告警"""
+
+    def __init__(self, interface: str, config: Config, notifier_callback=None):
+        self.interface = interface
+        self.config = config
+        self.notifier_callback = notifier_callback  # (title, msg) → 发送通知
+        self.running = False
+        self.thread = None
+
+        # 采样状态
+        self.prev_rx = 0
+        self.prev_tx = 0
+        self.prev_ts = 0.0
+
+        # 分钟累积
+        self.min_rx_peak = 0.0
+        self.min_tx_peak = 0.0
+        self.min_rx_sum = 0.0
+        self.min_tx_sum = 0.0
+        self.sample_count = 0
+        self.current_minute = ""
+
+        # 线程安全的缓存（供其他组件读取）
+        self._lock = threading.Lock()
+        self._latest_rx_speed = 0.0
+        self._latest_tx_speed = 0.0
+        self._latest_total_speed = 0.0
+
+        # 今日统计
+        self._today_rx_peak = 0.0
+        self._today_tx_peak = 0.0
+        self._today_total_peak = 0.0
+        self._today_rx_peak_time = ""
+        self._today_tx_peak_time = ""
+        self._today_total_peak_time = ""
+        self._today_rx_sum = 0.0
+        self._today_tx_sum = 0.0
+        self._today_total_sum = 0.0
+        self._today_samples = 0
+        self._today_date = ""
+        self._today_alert_count = 0
+
+        # 告警状态
+        self._alert_state = "normal"  # normal / alert
+        self._alert_last_ts = 0
+
+        # 流量累计（字节，用于报告）
+        self._today_rx_bytes = 0
+        self._today_tx_bytes = 0
+
+    def start(self):
+        """启动后台采样线程"""
+        if self.running:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._run, daemon=True, name="BandwidthMonitor")
+        self.thread.start()
+        log_message("INFO", f"带宽监控启动: 接口={self.interface}")
+
+    def stop(self):
+        """停止采样线程"""
+        self.running = False
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=3)
+
+    def _run(self):
+        """线程主循环"""
+        # 初始化基准
+        rx, tx = read_net_dev(self.interface)
+        if rx is None:
+            log_message("WARN", f"带宽监控: 网卡 {self.interface} 不存在，停止监控")
+            self.running = False
+            return
+        self.prev_rx = rx
+        self.prev_tx = tx
+        self.prev_ts = time.time()
+        self.current_minute = datetime.now().strftime("%Y%m%d%H%M")
+        self._today_date = datetime.now().strftime("%Y-%m-%d")
+
+        while self.running:
+            time.sleep(1)
+            if not self.running:
+                break
+            self._sample()
+
+    def _sample(self):
+        """单次采样"""
+        rx, tx = read_net_dev(self.interface)
+        if rx is None:
+            return
+        now = time.time()
+        time_delta = max(0.1, now - self.prev_ts)
+
+        # 计算 Mbps
+        rx_speed = max(0.0, (rx - self.prev_rx) * 8 / 1_000_000 / time_delta)
+        tx_speed = max(0.0, (tx - self.prev_tx) * 8 / 1_000_000 / time_delta)
+        total_speed = rx_speed + tx_speed
+
+        # 累计流量字节（在更新 prev 之前计算差值）
+        rx_delta = rx - self.prev_rx if rx >= self.prev_rx else 0
+        tx_delta = tx - self.prev_tx if tx >= self.prev_tx else 0
+        self._today_rx_bytes += int(rx_delta)
+        self._today_tx_bytes += int(tx_delta)
+
+        self.prev_rx = rx
+        self.prev_tx = tx
+        self.prev_ts = now
+
+        # 更新缓存
+        with self._lock:
+            self._latest_rx_speed = rx_speed
+            self._latest_tx_speed = tx_speed
+            self._latest_total_speed = total_speed
+
+        # 分钟累积
+        if rx_speed > self.min_rx_peak:
+            self.min_rx_peak = rx_speed
+        if tx_speed > self.min_tx_peak:
+            self.min_tx_peak = tx_speed
+        self.min_rx_sum += rx_speed
+        self.min_tx_sum += tx_speed
+        self.sample_count += 1
+
+        # 今日统计
+        now_str = datetime.now().strftime("%H:%M")
+        if rx_speed > self._today_rx_peak:
+            self._today_rx_peak = rx_speed
+            self._today_rx_peak_time = now_str
+        if tx_speed > self._today_tx_peak:
+            self._today_tx_peak = tx_speed
+            self._today_tx_peak_time = now_str
+        if total_speed > self._today_total_peak:
+            self._today_total_peak = total_speed
+            self._today_total_peak_time = now_str
+        self._today_rx_sum += rx_speed
+        self._today_tx_sum += tx_speed
+        self._today_total_sum += total_speed
+        self._today_samples += 1
+
+        # 日期切换
+        today = datetime.now().strftime("%Y-%m-%d")
+        if today != self._today_date:
+            self._today_date = today
+            self._today_rx_peak = 0.0
+            self._today_tx_peak = 0.0
+            self._today_total_peak = 0.0
+            self._today_rx_sum = 0.0
+            self._today_tx_sum = 0.0
+            self._today_total_sum = 0.0
+            self._today_samples = 0
+            self._today_alert_count = 0
+            self._today_rx_bytes = 0
+            self._today_tx_bytes = 0
+
+        # 分钟切换 → 写CSV
+        now_minute = datetime.now().strftime("%Y%m%d%H%M")
+        if now_minute != self.current_minute and self.sample_count > 0:
+            self._write_csv()
+            self.current_minute = now_minute
+
+        # 告警检查
+        self._check_alert(rx_speed, tx_speed, total_speed)
+
+    def _write_csv(self):
+        """写入一分钟的CSV记录"""
+        if self.sample_count == 0:
+            return
+
+        csv_dir = self.config.get('csv_log_dir', '/etc/traffic-padding/logs')
+        os.makedirs(csv_dir, exist_ok=True)
+        csv_file = os.path.join(csv_dir, f"bandwidth_{self._today_date.replace('-', '')}.csv")
+
+        # 写表头
+        if not os.path.exists(csv_file):
+            with open(csv_file, 'w') as f:
+                f.write("timestamp,rx_peak_mbps,tx_peak_mbps,total_peak_mbps,rx_avg_mbps,tx_avg_mbps,total_avg_mbps,samples\n")
+
+        rx_avg = self.min_rx_sum / self.sample_count
+        tx_avg = self.min_tx_sum / self.sample_count
+        total_peak = self.min_rx_peak + self.min_tx_peak
+        total_avg = rx_avg + tx_avg
+        ts = (datetime.now() - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M")
+
+        with open(csv_file, 'a') as f:
+            f.write(f"{ts},{self.min_rx_peak:.4f},{self.min_tx_peak:.4f},{total_peak:.4f},"
+                    f"{rx_avg:.4f},{tx_avg:.4f},{total_avg:.4f},{self.sample_count}\n")
+
+        # 重置分钟累积
+        self.min_rx_peak = 0.0
+        self.min_tx_peak = 0.0
+        self.min_rx_sum = 0.0
+        self.min_tx_sum = 0.0
+        self.sample_count = 0
+
+    def get_latest_stats(self) -> Dict:
+        """获取最新带宽数据（线程安全）"""
+        with self._lock:
+            return {
+                'rx_speed': self._latest_rx_speed,
+                'tx_speed': self._latest_tx_speed,
+                'total_speed': self._latest_total_speed,
+            }
+
+    def get_today_stats(self) -> Dict:
+        """获取今日带宽统计"""
+        samples = max(1, self._today_samples)
+        return {
+            'date': self._today_date,
+            'rx_peak': self._today_rx_peak,
+            'rx_peak_time': self._today_rx_peak_time,
+            'tx_peak': self._today_tx_peak,
+            'tx_peak_time': self._today_tx_peak_time,
+            'total_peak': self._today_total_peak,
+            'total_peak_time': self._today_total_peak_time,
+            'rx_avg': self._today_rx_sum / samples,
+            'tx_avg': self._today_tx_sum / samples,
+            'total_avg': self._today_total_sum / samples,
+            'samples': self._today_samples,
+            'alert_count': self._today_alert_count,
+            'rx_bytes': self._today_rx_bytes,
+            'tx_bytes': self._today_tx_bytes,
+        }
+
+    def _check_alert(self, rx_speed: float, tx_speed: float, total_speed: float):
+        """带宽告警检查"""
+        if not self.config.get('alert_enabled', False):
+            return
+
+        threshold = self.config.get('alert_threshold_mbps', 50)
+        cooldown = self.config.get('alert_cooldown', 180)
+        recovery = self.config.get('alert_recovery', True)
+        now = time.time()
+
+        if total_speed > threshold:
+            if self._alert_state == "alert" and (now - self._alert_last_ts) < cooldown:
+                return
+            self._alert_state = "alert"
+            self._alert_last_ts = now
+            self._today_alert_count += 1
+
+            over_pct = ((total_speed - threshold) / threshold * 100) if threshold > 0 else 0
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log_message("WARN", f"带宽告警: {total_speed:.1f}Mbps > {threshold}Mbps (超 {over_pct:.0f}%)")
+
+            if self.notifier_callback:
+                msg = (f"⚠️ 带宽告警通知\n\n"
+                       f"━━━━━━━━━━━━━━━━━━━━\n"
+                       f"当前带宽: {total_speed:.1f} Mbps\n"
+                       f"告警阈值: {threshold} Mbps\n"
+                       f"超限幅度: {over_pct:.0f}%\n\n"
+                       f"入站: {rx_speed:.1f} Mbps\n"
+                       f"出站: {tx_speed:.1f} Mbps\n\n"
+                       f"时间: {ts}")
+                self.notifier_callback("⚠️ 带宽告警", msg, "bandwidth_alert")
+
+        elif self._alert_state == "alert" and recovery:
+            duration = int(now - self._alert_last_ts)
+            self._alert_state = "normal"
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log_message("INFO", f"带宽恢复: {total_speed:.1f}Mbps, 告警持续 {duration // 60} 分钟")
+
+            if self.notifier_callback:
+                msg = (f"✅ 带宽恢复正常\n\n"
+                       f"━━━━━━━━━━━━━━━━━━━━\n"
+                       f"当前带宽: {total_speed:.1f} Mbps\n"
+                       f"告警阈值: {threshold} Mbps\n"
+                       f"告警持续: {duration // 60} 分钟\n\n"
+                       f"时间: {ts}")
+                self.notifier_callback("✅ 带宽恢复", msg, "bandwidth_alert_recovery")
+
+    def load_today_csv_stats(self) -> Optional[Dict]:
+        """从今日CSV文件加载统计（用于报告，避免重复计算）"""
+        csv_dir = self.config.get('csv_log_dir', '/etc/traffic-padding/logs')
+        csv_file = os.path.join(csv_dir, f"bandwidth_{self._today_date.replace('-', '')}.csv")
+        if not os.path.exists(csv_file):
+            return None
+
+        try:
+            with open(csv_file, 'r') as f:
+                lines = f.readlines()
+            if len(lines) <= 1:
+                return None
+
+            rx_peaks = []
+            tx_peaks = []
+            rx_avgs = []
+            tx_avgs = []
+            for line in lines[1:]:
+                parts = line.strip().split(',')
+                if len(parts) >= 7:
+                    rx_peaks.append(float(parts[1]))
+                    tx_peaks.append(float(parts[2]))
+                    rx_avgs.append(float(parts[4]))
+                    tx_avgs.append(float(parts[5]))
+
+            if not rx_peaks:
+                return None
+
+            return {
+                'rx_peak': max(rx_peaks),
+                'tx_peak': max(tx_peaks),
+                'total_peak': max(p1 + p2 for p1, p2 in zip(rx_peaks, tx_peaks)),
+                'rx_avg': sum(rx_avgs) / len(rx_avgs),
+                'tx_avg': sum(tx_avgs) / len(tx_avgs),
+                'total_avg': sum(r + t for r, t in zip(rx_avgs, tx_avgs)) / len(rx_avgs),
+                'minutes': len(rx_peaks),
+            }
+        except (IOError, ValueError):
+            return None
+
+    def load_range_csv_stats(self, start_date: str, end_date: str) -> Optional[Dict]:
+        """从CSV文件加载日期范围的统计"""
+        csv_dir = self.config.get('csv_log_dir', '/etc/traffic-padding/logs')
+        all_rx_peaks = []
+        all_tx_peaks = []
+        all_rx_avgs = []
+        all_tx_avgs = []
+        total_minutes = 0
+
+        current = start_date
+        while current <= end_date:
+            csv_file = os.path.join(csv_dir, f"bandwidth_{current}.csv")
+            if os.path.exists(csv_file):
+                try:
+                    with open(csv_file, 'r') as f:
+                        for line in f.readlines()[1:]:
+                            parts = line.strip().split(',')
+                            if len(parts) >= 7:
+                                all_rx_peaks.append(float(parts[1]))
+                                all_tx_peaks.append(float(parts[2]))
+                                all_rx_avgs.append(float(parts[4]))
+                                all_tx_avgs.append(float(parts[5]))
+                                total_minutes += 1
+                except (IOError, ValueError):
+                    pass
+            # 日期 +1
+            try:
+                dt = datetime.strptime(current, "%Y%m%d") + timedelta(days=1)
+                current = dt.strftime("%Y%m%d")
+            except ValueError:
+                break
+
+        if not all_rx_peaks:
+            return None
+
+        return {
+            'rx_peak': max(all_rx_peaks),
+            'tx_peak': max(all_tx_peaks),
+            'total_peak': max(p1 + p2 for p1, p2 in zip(all_rx_peaks, all_tx_peaks)),
+            'rx_avg': sum(all_rx_avgs) / len(all_rx_avgs),
+            'tx_avg': sum(all_tx_avgs) / len(all_tx_avgs),
+            'total_avg': sum(r + t for r, t in zip(all_rx_avgs, all_tx_avgs)) / len(all_rx_avgs),
+            'minutes': total_minutes,
+        }
+
+    def cleanup_csv(self, start_date: str, end_date: str):
+        """清理日期范围内的CSV文件"""
+        csv_dir = self.config.get('csv_log_dir', '/etc/traffic-padding/logs')
+        deleted = 0
+        current = start_date
+        while current <= end_date:
+            csv_file = os.path.join(csv_dir, f"bandwidth_{current}.csv")
+            if os.path.exists(csv_file):
+                try:
+                    os.remove(csv_file)
+                    deleted += 1
+                except OSError:
+                    pass
+            try:
+                dt = datetime.strptime(current, "%Y%m%d") + timedelta(days=1)
+                current = dt.strftime("%Y%m%d")
+            except ValueError:
+                break
+        if deleted > 0:
+            log_message("INFO", f"清理带宽日志: 删除 {deleted} 个文件")
+
+
+
+# ============================================================================
+# AI 分析器（定期调用模型分析数据，缓存结果）
+# ============================================================================
+
+class AIAnalyzer:
+    """后台线程：每小时调用 AI 模型分析带宽和填充数据"""
+
+    API_PATH = "/v1/chat/completions"
+
+    def __init__(self, config: Config, service_ref=None):
+        self.config = config
+        self.service_ref = service_ref  # 延迟绑定 TrafficPaddingService
+        self.running = False
+        self.thread = None
+        self._lock = threading.Lock()
+        self._last_analysis = ""  # 最近一次分析结果
+        self._last_analysis_time = 0
+        self._analysis_file = "/etc/traffic-padding/ai_analysis.json"
+        self._load_cached()
+
+    def _load_cached(self):
+        """加载缓存的分析结果"""
+        try:
+            if os.path.exists(self._analysis_file):
+                with open(self._analysis_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self._last_analysis = data.get('analysis', '')
+                    self._last_analysis_time = data.get('timestamp', 0)
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    def _save_cached(self):
+        """保存分析结果"""
+        atomic_write_json(self._analysis_file, {
+            'analysis': self._last_analysis,
+            'timestamp': self._last_analysis_time,
+        })
+
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._run, daemon=True, name="AIAnalyzer")
+        self.thread.start()
+        log_message("INFO", "AI 分析器启动")
+
+    def stop(self):
+        self.running = False
+
+    def _run(self):
+        """线程主循环：每 45-55 分钟随机调用一次"""
+        # 启动后先等 3 分钟，让系统收集一些数据
+        for _ in range(180):
+            if not self.running:
+                return
+            time.sleep(1)
+
+        while self.running:
+            self._analyze()
+            # 随机等待 45-55 分钟（抖动，确保不会超过 1 小时限额）
+            wait_seconds = random.randint(2700, 3300)
+            for _ in range(wait_seconds):
+                if not self.running:
+                    return
+                time.sleep(1)
+
+    def _prepare_data(self) -> str:
+        """准备发送给 AI 的数据摘要"""
+        lines = []
+        now = datetime.now()
+
+        # 带宽监控数据
+        if self.service_ref and self.service_ref.bandwidth_monitor:
+            bw = self.service_ref.bandwidth_monitor.get_today_stats()
+            lines.append(f"=== 带宽监控 ({now.strftime('%Y-%m-%d %H:%M')}) ===")
+            lines.append(f"入站峰值: {bw['rx_peak']:.1f} Mbps ({bw['rx_peak_time']})")
+            lines.append(f"出站峰值: {bw['tx_peak']:.1f} Mbps ({bw['tx_peak_time']})")
+            lines.append(f"入站均值: {bw['rx_avg']:.1f} Mbps")
+            lines.append(f"出站均值: {bw['tx_avg']:.1f} Mbps")
+            lines.append(f"总流量: RX {bw['rx_bytes'] / (1024**3):.2f} GB / TX {bw['tx_bytes'] / (1024**3):.2f} GB")
+            lines.append(f"告警次数: {bw['alert_count']}")
+
+            # 最近 1 小时的 CSV 数据
+            csv_dir = self.config.get('csv_log_dir', '/etc/traffic-padding/logs')
+            csv_file = os.path.join(csv_dir, f"bandwidth_{now.strftime('%Y%m%d')}.csv")
+            if os.path.exists(csv_file):
+                try:
+                    with open(csv_file, 'r') as f:
+                        all_lines = f.readlines()
+                    # 取最近 60 行（1 小时）
+                    recent = all_lines[-60:] if len(all_lines) > 60 else all_lines[1:]
+                    if len(recent) > 1:
+                        rx_vals = [float(l.split(',')[4]) for l in recent[1:] if ',' in l]
+                        tx_vals = [float(l.split(',')[5]) for l in recent[1:] if ',' in l]
+                        if rx_vals:
+                            lines.append(f"近1小时入站: 均值{sum(rx_vals)/len(rx_vals):.1f}Mbps, 最大{max(rx_vals):.1f}Mbps, 最小{min(rx_vals):.1f}Mbps")
+                            lines.append(f"近1小时出站: 均值{sum(tx_vals)/len(tx_vals):.1f}Mbps, 最大{max(tx_vals):.1f}Mbps, 最小{min(tx_vals):.1f}Mbps")
+                except (IOError, ValueError):
+                    pass
+
+        # 流量填充数据
+        if self.service_ref:
+            stats = self.service_ref.downloader.get_stats()
+            period = self.service_ref.get_period_stats('daily')
+            lines.append(f"\n=== 流量填充 ===")
+            lines.append(f"今日填充: {period['gb']:.3f} GB")
+            lines.append(f"累计总量: {self.service_ref.total_downloaded_all_time / (1024**3):.3f} GB")
+            lines.append(f"任务数: {stats['task_count']}, 成功: {stats['success_count']}, 失败: {stats['fail_count']}")
+            avg_speed = self.service_ref.downloader.get_avg_speed()
+            lines.append(f"平均下载速度: {avg_speed:.2f} MB/s")
+            lines.append(f"配额使用: {self.service_ref.scheduler.daily_quota_used / (1024**3):.3f} / {self.config.get('max_daily_extra_gb', 10)} GB")
+
+            # QoS 状态
+            if self.service_ref.qos_probe.enabled:
+                lines.append(f"QoS: {self.service_ref.qos_probe.get_status_str()}")
+
+        return "\n".join(lines)
+
+    def _call_api(self, data_summary: str) -> str:
+        """调用 DeepSeek API"""
+        api_key = self.config.get('ai_api_key', '')
+        base_url = self.config.get('ai_base_url', '')
+        model = self.config.get('ai_model', 'DeepSeek-R1-Distill-Llama-8B-F16')
+
+        if not api_key or not base_url:
+            return ""
+
+        url = base_url.rstrip('/') + self.API_PATH
+
+        prompt = (
+            "你是一个服务器流量分析助手。请分析以下数据，用中文回答。\n"
+            "要求：1.判断流量是否正常 2.如有异常指出具体问题 3.给出一条可操作的建议\n"
+            "控制在120字以内，直接输出分析结果，不要重复数据本身。\n\n"
+            f"{data_summary}"
+        )
+
+        payload = json.dumps({
+            "model": model,
+            "temperature": 0.6,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "max_tokens": 500,
+        }).encode('utf-8')
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+
+        try:
+            req = urllib.request.Request(url, data=payload, headers=headers)
+            with urllib.request.urlopen(req, timeout=90, context=SSL_CONTEXT_SAFE) as resp:
+                result = json.loads(resp.read().decode('utf-8'))
+                content = result['choices'][0]['message']['content']
+                # 清理可能附带的 reasoning_content
+                if 'reasoning_content' in str(result):
+                    pass  # 非流式模式下 reasoning_content 不会出现在 message 里
+                return content.strip()
+        except Exception as e:
+            log_message("WARN", f"AI 分析调用失败: {e}", throttle_key="ai_fail")
+            return ""
+
+    def _analyze(self):
+        """执行一次分析"""
+        if not self.config.get('ai_enabled', True):
+            return
+
+        data = self._prepare_data()
+        if not data:
+            return
+
+        log_message("INFO", "执行 AI 分析...")
+        result = self._call_api(data)
+
+        if result:
+            with self._lock:
+                self._last_analysis = result
+                self._last_analysis_time = time.time()
+            self._save_cached()
+            log_message("INFO", f"AI 分析完成 ({len(result)} 字)")
+        else:
+            log_message("WARN", "AI 分析未返回结果")
+
+    def get_latest(self) -> str:
+        """获取最近一次分析结果"""
+        with self._lock:
+            return self._last_analysis
+
+    def get_latest_time(self) -> float:
+        with self._lock:
+            return self._last_analysis_time
+
+    def trigger_now(self):
+        """手动触发一次分析（在当前线程执行）"""
+        threading.Thread(target=self._analyze, daemon=True).start()
+
+
+# ============================================================================
 # 配置管理（支持热重载）
 # ============================================================================
 
@@ -208,8 +789,9 @@ class Config:
 # ============================================================================
 
 class TrafficMonitor:
-    def __init__(self, interface: str):
+    def __init__(self, interface: str, bandwidth_monitor: 'BandwidthMonitor' = None):
         self.interface = interface
+        self.bw_monitor = bandwidth_monitor  # 可选：从带宽监控读缓存
         self.prev_rx_bytes = 0
         self.prev_tx_bytes = 0
         self.prev_time = 0
@@ -1204,6 +1786,13 @@ class BaseNotifier:
         # QoS 状态
         qos_result = service._cached_qos_result or {}
 
+        # 带宽监控数据
+        bw_stats = None
+        bw_today = None
+        if service.bandwidth_monitor:
+            bw_today = service.bandwidth_monitor.get_today_stats()
+            bw_stats = service.bandwidth_monitor.load_today_csv_stats()
+
         return {
             'now': datetime.now(),
             'stats': stats,
@@ -1231,21 +1820,41 @@ class BaseNotifier:
             'time_weight': service.scheduler.get_time_weight(),
             'server_name': service.server_name,
             'freq_label': self._get_freq_label(),
+            'bw_today': bw_today,
+            'bw_stats': bw_stats,
+            'ai_analysis': service.ai_analyzer.get_latest() if service.ai_analyzer else '',
         }
 
     def _get_freq_label(self) -> str:
         """获取频率标签"""
         return {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(self.report_freq, "报告")
 
+    def _should_notify(self, notify_type: str, service: 'TrafficPaddingService' = None) -> bool:
+        """检查某类通知是否启用"""
+        if service is None:
+            return True
+        return service.notify_settings.get(notify_type, True)
+
     def check_and_send(self, service: 'TrafficPaddingService'):
         """检查是否该发送报告并发送"""
         if not self.enabled:
+            return
+        # 根据报告频率确定通知类型
+        freq_type_map = {"daily": "report_daily", "weekly": "report_weekly", "monthly": "report_monthly"}
+        notify_type = freq_type_map.get(self.report_freq, "report_daily")
+        if not self._should_notify(notify_type, service):
             return
         if self._should_report():
             report = self.build_report(service)
             if self.send_message(report):
                 self.last_report_date = datetime.now().strftime("%Y-%m-%d")
                 log_message("INFO", f"{self._get_freq_label()} 报告已发送")
+                # 周报发送成功后清理CSV日志
+                if self.report_freq == "weekly" and service.bandwidth_monitor:
+                    now = datetime.now()
+                    end_date = now.strftime("%Y%m%d")
+                    start_date = (now - timedelta(days=6)).strftime("%Y%m%d")
+                    service.bandwidth_monitor.cleanup_csv(start_date, end_date)
             else:
                 log_message("WARN", f"{self._get_freq_label()} 报告发送失败")
 
@@ -1310,14 +1919,32 @@ class TelegramNotifier(BaseNotifier):
 ├ 抖动: {d['qos_result'].get('jitter', 0):.0f}ms
 └ 丢包: {d['qos_result'].get('loss', 0):.0f}%"""
 
+        # 带宽监控段
+        bw_str = ""
+        if d['bw_today']:
+            bt = d['bw_today']
+            bw_str = f"""
+📊 带宽监控
+├ 入站峰值: {bt['rx_peak']:.1f} Mbps ({bt['rx_peak_time']})
+├ 出站峰值: {bt['tx_peak']:.1f} Mbps ({bt['tx_peak_time']})
+├ 入站平均: {bt['rx_avg']:.1f} Mbps
+├ 出站平均: {bt['tx_avg']:.1f} Mbps
+├ 总流量: RX {bt['rx_bytes'] / (1024**3):.2f} GB / TX {bt['tx_bytes'] / (1024**3):.2f} GB
+└ 告警: {bt['alert_count']} 次"""
+
+        # AI 分析段
+        ai_str = ""
+        if d['ai_analysis']:
+            ai_str = f"\n\n🤖 AI 分析\n{d['ai_analysis']}"
+
         return f"""📋 <b>Traffic Padding {d['freq_label']}</b>
 ━━━━━━━━━━━━━━━━━━━━
 
 🖥️ <b>{d['server_name']}</b>
 
-🕐 {d['now'].strftime("%Y-%m-%d %H:%M")}
+🕐 {d['now'].strftime("%Y-%m-%d %H:%M")}{bw_str}
 
-📊 用量统计
+📦 流量填充
 ├ {period_str}
 ├ 累计总量: {d['total_gb']:.3f} GB
 ├ 今日配额: {d['quota_used'] / (1024**3):.3f} / {d['daily_quota_gb']:.1f} GB{d['monthly_str']}
@@ -1346,7 +1973,7 @@ class TelegramNotifier(BaseNotifier):
 ⚙️ 配置
 ├ 网卡: {d['interface']}
 ├ 比例: 1:{d['target_ratio']}
-└ 权重: {d['time_weight']:.2f}x"""
+└ 权重: {d['time_weight']:.2f}x{ai_str}"""
 
 
 # ============================================================================
@@ -1452,6 +2079,24 @@ class DingTalkNotifier(BaseNotifier):
 
         chart_str = self._draw_traffic_chart(service)
 
+        # 带宽监控段
+        bw_str = ""
+        if d['bw_today']:
+            bt = d['bw_today']
+            bw_str = f"""
+### 📊 带宽监控
+- 入站峰值: {bt['rx_peak']:.1f} Mbps ({bt['rx_peak_time']})
+- 出站峰值: {bt['tx_peak']:.1f} Mbps ({bt['tx_peak_time']})
+- 入站平均: {bt['rx_avg']:.1f} Mbps
+- 出站平均: {bt['tx_avg']:.1f} Mbps
+- 总流量: RX {bt['rx_bytes'] / (1024**3):.2f} GB / TX {bt['tx_bytes'] / (1024**3):.2f} GB
+- 告警: {bt['alert_count']} 次"""
+
+        # AI 分析段
+        ai_str = ""
+        if d['ai_analysis']:
+            ai_str = f"\n\n### 🤖 AI 分析\n{d['ai_analysis']}"
+
         return f"""## 📋 Traffic Padding {d['freq_label']}
 
 ---
@@ -1459,8 +2104,9 @@ class DingTalkNotifier(BaseNotifier):
 **🖥️ {d['server_name']}**
 
 🕐 **{d['now'].strftime("%Y-%m-%d %H:%M")}**
+{bw_str}
 
-### 📊 用量统计
+### 📦 流量填充
 - {period_str}
 - 累计总量: {d['total_gb']:.3f} GB
 - 今日配额: {d['quota_used'] / (1024**3):.3f} / {d['daily_quota_gb']:.1f} GB{d['monthly_str']}
@@ -1489,7 +2135,7 @@ class DingTalkNotifier(BaseNotifier):
 ### ⚙️ 配置
 - 网卡: {d['interface']}
 - 比例: 1:{d['target_ratio']}
-- 权重: {d['time_weight']:.2f}x"""
+- 权重: {d['time_weight']:.2f}x{ai_str}"""
 
 
 # ============================================================================
@@ -1555,22 +2201,52 @@ class HealthChecker:
 class TrafficPaddingService:
     def __init__(self, config_path: str = CONFIG_FILE):
         self.config = Config(config_path)
-        self.monitor = TrafficMonitor(self.config.get('interface', 'eth0'))
         self.url_pool = URLPool()
         self.downloader = MicroTaskDownloader(self.url_pool, self.config)
         self.scheduler = Scheduler(self.config)
         self.tg_notifier = TelegramNotifier(self.config)
         self.dingtalk_notifier = DingTalkNotifier(self.config)
-        self.qos_probe = QoSProbe(self.config)  # QoS 探测器
+        self.qos_probe = QoSProbe(self.config)
         self.running = False
         self.cycle_count = 0
         self.last_tg_check = 0
         self.last_qos_check = 0
-        self.first_task_done = False  # 首次任务完成标志
-        self._cached_traffic_stats = None  # 缓存流量统计
-        self.start_time = time.time()  # 记录启动时间
-        self.manual_report_requested = False  # 手动推送请求标志
+        self.first_task_done = False
+        self._cached_traffic_stats = None
+        self.start_time = time.time()
+        self.manual_report_requested = False
         self.server_name = self.config.get('server_name', 'Realm中转服务器')
+
+        # 通知管理（8种通知类型，默认全部启用）
+        self.notify_settings = {
+            'report_daily': True,
+            'report_weekly': True,
+            'report_monthly': True,
+            'bandwidth_alert': True,
+            'bandwidth_alert_recovery': True,
+            'qos_alert': True,
+            'service_start_stop': True,
+            'first_test': True,
+        }
+        self._load_notify_settings()
+
+        # 带宽监控（独立线程）
+        self.bandwidth_monitor = None
+        if self.config.get('monitor_enabled', True):
+            self.bandwidth_monitor = BandwidthMonitor(
+                self.config.get('interface', 'eth0'),
+                self.config,
+                notifier_callback=self._send_notification
+            )
+            self.bandwidth_monitor.start()
+
+        # 流量监控（从带宽监控读缓存）
+        self.monitor = TrafficMonitor(self.config.get('interface', 'eth0'), self.bandwidth_monitor)
+
+        # AI 分析器
+        self.ai_analyzer = AIAnalyzer(self.config, self)
+        if self.config.get('ai_enabled', True):
+            self.ai_analyzer.start()
 
         # 用量统计
         self.stats_file = STATS_FILE
@@ -1810,8 +2486,26 @@ class TrafficPaddingService:
             'label': period_label
         }
 
-    def _send_notification(self, text: str):
-        """同时发送到 TG 和钉钉"""
+    def _load_notify_settings(self):
+        """加载通知设置"""
+        try:
+            notify_file = os.path.join(os.path.dirname(self.config.config_path), "notify.json")
+            if os.path.exists(notify_file):
+                with open(notify_file, 'r', encoding='utf-8') as f:
+                    saved = json.load(f)
+                    self.notify_settings.update(saved)
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    def save_notify_settings(self):
+        """保存通知设置"""
+        notify_file = os.path.join(os.path.dirname(self.config.config_path), "notify.json")
+        atomic_write_json(notify_file, self.notify_settings)
+
+    def _send_notification(self, title: str, text: str, notify_type: str = None):
+        """发送通知（可按类型过滤）"""
+        if notify_type and not self.notify_settings.get(notify_type, True):
+            return
         if self.tg_notifier.enabled:
             self.tg_notifier.send_message(text)
         if self.dingtalk_notifier.enabled:
@@ -1870,7 +2564,7 @@ class TrafficPaddingService:
                         self.first_task_done = True
                         url_name = self.url_pool.get_url_name(url)
                         # 确定推送渠道和频率
-                        if self.tg_notifier.enabled:
+                        if self.tg_notifier.enabled and self.notify_settings.get('first_test', True):
                             freq_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(self.tg_notifier.report_freq, "报告")
                             self.tg_notifier.send_message(
                                 f"🧪 <b>【数据推送测试消息】</b>\n"
@@ -1886,7 +2580,7 @@ class TrafficPaddingService:
                                 f"└ 状态: 正常运行中\n\n"
                                 f"💡 这是一次性测试消息，后续将按 [{freq_label}] 频率自动推送。"
                             )
-                        if self.dingtalk_notifier.enabled:
+                        if self.dingtalk_notifier.enabled and self.notify_settings.get('first_test', True):
                             freq_label = {"daily": "日报", "weekly": "周报", "monthly": "月报"}.get(self.dingtalk_notifier.report_freq, "报告")
                             self.dingtalk_notifier.send_message(
                                 f"## 🧪 【数据推送测试消息】\n\n---\n\n"
@@ -1958,6 +2652,8 @@ class TrafficPaddingService:
 
     def _send_qos_alert(self):
         """发送 QoS 告警"""
+        if not self.notify_settings.get('qos_alert', True):
+            return
         result = self._cached_qos_result
         if not result:
             return
@@ -2019,7 +2715,7 @@ class TrafficPaddingService:
 
         # 发送启动通知（包含验证结果）
         verify_status = "✓ 验证通过" if verify_result.get('success') else "✗ 验证失败"
-        if self.tg_notifier.enabled:
+        if self.tg_notifier.enabled and self.notify_settings.get('service_start_stop', True):
             self.tg_notifier.send_message(
                 f"🟢 <b>Traffic Padding 已启动</b>\n\n"
                 f"🖥️ {self.server_name}\n\n"
@@ -2030,7 +2726,7 @@ class TrafficPaddingService:
                 f"验证: {verify_status}\n"
                 f"报告频率: {self.tg_notifier.report_freq}"
             )
-        if self.dingtalk_notifier.enabled:
+        if self.dingtalk_notifier.enabled and self.notify_settings.get('service_start_stop', True):
             self.dingtalk_notifier.send_message(
                 f"## 🟢 Traffic Padding 已启动\n\n"
                 f"**🖥️ {self.server_name}**\n\n"
@@ -2049,10 +2745,16 @@ class TrafficPaddingService:
             log_message("INFO", "收到停止信号")
         finally:
             self.running = False
+            # 停止带宽监控
+            if self.bandwidth_monitor:
+                self.bandwidth_monitor.stop()
+            # 停止 AI 分析器
+            if self.ai_analyzer:
+                self.ai_analyzer.stop()
             # 发送停止通知
             stats = self.downloader.get_stats()
             total_gb = self.total_downloaded_all_time / (1024 ** 3)
-            if self.tg_notifier.enabled:
+            if self.tg_notifier.enabled and self.notify_settings.get('service_start_stop', True):
                 self.tg_notifier.send_message(
                     f"🔴 <b>Traffic Padding 已停止</b>\n\n"
                     f"🖥️ {self.server_name}\n\n"
@@ -2061,7 +2763,7 @@ class TrafficPaddingService:
                     f"本次下载: {stats['total_downloaded_mb']:.1f} MB\n"
                     f"累计总量: {total_gb:.3f} GB"
                 )
-            if self.dingtalk_notifier.enabled:
+            if self.dingtalk_notifier.enabled and self.notify_settings.get('service_start_stop', True):
                 self.dingtalk_notifier.send_message(
                     f"## 🔴 Traffic Padding 已停止\n\n"
                     f"**🖥️ {self.server_name}**\n\n"
@@ -2109,8 +2811,14 @@ def main():
         log_message("INFO", "收到 SIGUSR1，触发手动推送...")
         service.manual_report_requested = True
 
+    def sigusr2_handler(signum, frame):
+        log_message("INFO", "收到 SIGUSR2，触发手动 AI 分析...")
+        if service.ai_analyzer:
+            service.ai_analyzer.trigger_now()
+
     signal.signal(signal.SIGTERM, sigterm_handler)
     signal.signal(signal.SIGUSR1, sigusr1_handler)
+    signal.signal(signal.SIGUSR2, sigusr2_handler)
     service.run()
 
 
