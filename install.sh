@@ -674,6 +674,10 @@ print(c.get('tg_report_freq', c.get('dingtalk_report_freq', 'daily')))
 print(c.get('tg_report_hour', c.get('dingtalk_report_hour', 23)))
 print(c.get('ai_base_url', 'https://api.openai.com/v1'))
 print(c.get('ai_model', 'gpt-4o-mini'))
+print(c.get('enable_night_mode', True))
+print(c.get('night_multiplier', 5.0))
+print(','.join(str(x) for x in c.get('peak_hours', [19,20,21,22])))
+print(c.get('peak_multiplier', 0.6))
 " 2>/dev/null)
 
         local server_name=$(echo "$config_data" | sed -n '1p')
@@ -686,6 +690,10 @@ print(c.get('ai_model', 'gpt-4o-mini'))
         local hour=$(echo "$config_data" | sed -n '8p')
         local ai_base_url=$(echo "$config_data" | sed -n '9p')
         local ai_model=$(echo "$config_data" | sed -n '10p')
+        local night_mode=$(echo "$config_data" | sed -n '11p')
+        local night_mult=$(echo "$config_data" | sed -n '12p')
+        local peak_hours=$(echo "$config_data" | sed -n '13p')
+        local peak_mult=$(echo "$config_data" | sed -n '14p')
 
         local push_status="未启用"
         [[ "$tg_enabled" == "True" ]] && push_status="Telegram"
@@ -711,9 +719,8 @@ print(c.get('ai_model', 'gpt-4o-mini'))
         printf "${CYAN}|${NC}    ${CYAN}[6]${NC} 报告频率    ${GREEN}%-40s${NC}${CYAN}|${NC}\n" "${freq_label}"
         printf "${CYAN}|${NC}    ${CYAN}[7]${NC} 推送时间    ${GREEN}%-40s${NC}${CYAN}|${NC}\n" "每日 ${hour}:00"
         echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
-        printf "${CYAN}|${NC}    ${CYAN}[8]${NC} API 地址    ${GREEN}%-40s${NC}${CYAN}|${NC}\n" "${ai_base_url}"
-        printf "${CYAN}|${NC}    ${CYAN}[9]${NC} 模型名      ${GREEN}%-40s${NC}${CYAN}|${NC}\n" "${ai_model}"
-        echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}    ${CYAN}[8]${NC} AI 模型配置                                                      ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}    ${CYAN}[9]${NC} 调度设置                                                         ${CYAN}|${NC}"
         echo -e "${CYAN}|${NC}    ${CYAN}[10]${NC} 通知管理                                                        ${CYAN}|${NC}"
         echo -e "${CYAN}|${NC}    ${CYAN}[11]${NC} 打开编辑器（高级）                                     ${CYAN}|${NC}"
         echo -e "${CYAN}|${NC}    ${CYAN}[0]${NC} 返回                                                        ${CYAN}|${NC}"
@@ -892,36 +899,115 @@ with open('${CONFIG_DIR}/config.json', 'w') as f:
                 fi
                 ;;
             8)
-                # API 地址
-                echo -ne "  新 API 地址 [当前: ${ai_base_url}]: "
-                read new_url
-                if [[ -n "$new_url" ]]; then
-                    python3 -c "
+                # AI 模型配置子菜单
+                while true; do
+                    echo ""
+                    echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
+                    echo -e "${CYAN}|${NC}  ${BOLD}AI 模型配置${NC}                                                    ${CYAN}|${NC}"
+                    echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
+                    printf "${CYAN}|${NC}    ${CYAN}[1]${NC} API 地址    ${GREEN}%-40s${NC}${CYAN}|${NC}\n" "${ai_base_url}"
+                    printf "${CYAN}|${NC}    ${CYAN}[2]${NC} 模型名      ${GREEN}%-40s${NC}${CYAN}|${NC}\n" "${ai_model}"
+                    echo -e "${CYAN}|${NC}    ${CYAN}[0]${NC} 返回                                                        ${CYAN}|${NC}"
+                    echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
+                    echo ""
+                    echo -ne "  请选择 [0-2]: "
+                    read ai_choice
+                    case "$ai_choice" in
+                        1)
+                            echo -ne "  新 API 地址 [当前: ${ai_base_url}]: "
+                            read new_url
+                            if [[ -n "$new_url" ]]; then
+                                python3 -c "
 import json
-with open('${CONFIG_DIR}/config.json', 'r') as f:
-    config = json.load(f)
+with open('${CONFIG_DIR}/config.json', 'r') as f: config = json.load(f)
 config['ai_base_url'] = '${new_url}'
-with open('${CONFIG_DIR}/config.json', 'w') as f:
-    json.dump(config, f, indent=2, ensure_ascii=False)
+with open('${CONFIG_DIR}/config.json', 'w') as f: json.dump(config, f, indent=2, ensure_ascii=False)
 "
-                    log_info "已更新 API 地址"
-                fi
+                                ai_base_url="${new_url}"
+                                log_info "已更新 API 地址"
+                            fi
+                            ;;
+                        2)
+                            echo -ne "  新模型名 [当前: ${ai_model}]: "
+                            read new_model
+                            if [[ -n "$new_model" ]]; then
+                                python3 -c "
+import json
+with open('${CONFIG_DIR}/config.json', 'r') as f: config = json.load(f)
+config['ai_model'] = '${new_model}'
+with open('${CONFIG_DIR}/config.json', 'w') as f: json.dump(config, f, indent=2, ensure_ascii=False)
+"
+                                ai_model="${new_model}"
+                                log_info "已更新模型名"
+                            fi
+                            ;;
+                        0) break ;;
+                        *) echo -e "  ${RED}无效选项${NC}" ;;
+                    esac
+                done
                 ;;
             9)
-                # 模型名
-                echo -ne "  新模型名 [当前: ${ai_model}]: "
-                read new_model
-                if [[ -n "$new_model" ]]; then
-                    python3 -c "
+                # 调度设置子菜单
+                while true; do
+                    echo ""
+                    local night_label="${DIM}已关闭${NC}"
+                    [[ "$night_mode" == "True" ]] && night_label="${GREEN}已开启${NC}"
+                    echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
+                    echo -e "${CYAN}|${NC}  ${BOLD}调度设置${NC}                                                      ${CYAN}|${NC}"
+                    echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
+                    printf "${CYAN}|${NC}    ${CYAN}[1]${NC} 夜间降频    ${GREEN}%-10s${NC}  凌晨2-5点，间隔×${night_mult}        ${CYAN}|${NC}\n" "$(echo -e "$night_label")"
+                    printf "${CYAN}|${NC}    ${CYAN}[2]${NC} 晚高峰时段  ${GREEN}%-40s${NC}${CYAN}|${NC}\n" "${peak_hours}（间隔×${peak_mult}）"
+                    echo -e "${CYAN}|${NC}    ${CYAN}[0]${NC} 返回                                                        ${CYAN}|${NC}"
+                    echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
+                    echo ""
+                    echo -ne "  请选择 [0-2]: "
+                    read sched_choice
+                    case "$sched_choice" in
+                        1)
+                            if [[ "$night_mode" == "True" ]]; then
+                                python3 -c "
 import json
-with open('${CONFIG_DIR}/config.json', 'r') as f:
-    config = json.load(f)
-config['ai_model'] = '${new_model}'
-with open('${CONFIG_DIR}/config.json', 'w') as f:
-    json.dump(config, f, indent=2, ensure_ascii=False)
+with open('${CONFIG_DIR}/config.json', 'r') as f: config = json.load(f)
+config['enable_night_mode'] = False
+with open('${CONFIG_DIR}/config.json', 'w') as f: json.dump(config, f, indent=2, ensure_ascii=False)
 "
-                    log_info "已更新模型名"
-                fi
+                                night_mode="False"
+                                log_info "夜间降频已关闭"
+                            else
+                                echo -ne "  降频倍数 [当前: ${night_mult}, 越大间隔越长]: "
+                                read new_mult
+                                python3 -c "
+import json
+with open('${CONFIG_DIR}/config.json', 'r') as f: config = json.load(f)
+config['enable_night_mode'] = True
+config['night_multiplier'] = ${new_mult:-$night_mult}
+with open('${CONFIG_DIR}/config.json', 'w') as f: json.dump(config, f, indent=2, ensure_ascii=False)
+"
+                                night_mode="True"
+                                night_mult="${new_mult:-$night_mult}"
+                                log_info "夜间降频已开启（倍数: ${night_mult}）"
+                            fi
+                            ;;
+                        2)
+                            echo -ne "  晚高峰时段（逗号分隔）[当前: ${peak_hours}]: "
+                            read new_hours
+                            echo -ne "  高峰加速倍数 [当前: ${peak_mult}, 越小越快]: "
+                            read new_peak_mult
+                            python3 -c "
+import json
+with open('${CONFIG_DIR}/config.json', 'r') as f: config = json.load(f)
+config['peak_hours'] = [int(x.strip()) for x in '${new_hours:-$peak_hours}'.split(',')]
+config['peak_multiplier'] = ${new_peak_mult:-$peak_mult}
+with open('${CONFIG_DIR}/config.json', 'w') as f: json.dump(config, f, indent=2, ensure_ascii=False)
+"
+                            peak_hours="${new_hours:-$peak_hours}"
+                            peak_mult="${new_peak_mult:-$peak_mult}"
+                            log_info "已更新晚高峰设置"
+                            ;;
+                        0) break ;;
+                        *) echo -e "  ${RED}无效选项${NC}" ;;
+                    esac
+                done
                 ;;
             10)
                 # 通知管理
