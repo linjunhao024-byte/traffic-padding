@@ -1418,7 +1418,7 @@ generate_config() {
     "dingtalk_report_align": "${DINGTALK_REPORT_ALIGN:-natural}",
     "dingtalk_monthly_reset_day": ${DINGTALK_MONTHLY_RESET_DAY},
     "qos_probe_enabled": true,
-    "qos_probe_targets": ["https://www.google.co.jp", "https://www.yahoo.co.jp", "https://www.amazon.co.jp"],
+    "qos_probe_targets": ["https://cn.bing.com", "https://www.baidu.com", "https://cdn.aliyundcdntest.com/test_1m", "https://dl.google.com", "https://www.apple.com"],
     "qos_probe_count": 5,
     "download_mode": "short"
 }

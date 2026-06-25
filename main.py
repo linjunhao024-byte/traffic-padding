@@ -73,6 +73,9 @@ SSL_CONTEXT = ssl.create_default_context()
 SSL_CONTEXT.check_hostname = False
 SSL_CONTEXT.verify_mode = ssl.CERT_NONE
 
+# 安全 SSL 上下文（用于 QoS 探测、通知推送等需要验证身份的场景）
+SSL_CONTEXT_SAFE = ssl.create_default_context()
+
 try:
     syslog.openlog("traffic-padding", syslog.LOG_PID, syslog.LOG_DAEMON)
     SYSLOG_AVAILABLE = True
@@ -93,6 +96,25 @@ def log_message(level: str, message: str, throttle_key: str = None):
     if SYSLOG_AVAILABLE:
         priority = {"INFO": syslog.LOG_INFO, "WARN": syslog.LOG_WARNING, "ERROR": syslog.LOG_ERR}.get(level, syslog.LOG_INFO)
         syslog.syslog(priority, message)
+
+
+def atomic_write_json(filepath: str, data) -> bool:
+    """原子写入 JSON 文件（先写临时文件再 rename，防止崩溃导致文件损坏）"""
+    try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        tmp_path = filepath + ".tmp"
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, filepath)  # 原子操作
+        return True
+    except (IOError, OSError) as e:
+        log_message("ERROR", f"写入 {filepath} 失败: {e}")
+        # 清理可能残留的临时文件
+        try:
+            os.remove(filepath + ".tmp")
+        except OSError:
+            pass
+        return False
 
 
 def detect_system_counter_bits() -> int:
@@ -252,23 +274,29 @@ class TrafficMonitor:
 class QoSProbe:
     """跨境网络 QoS 探测器（HTTP 方式）"""
 
+    # 默认探测目标：国内外都能访问的高可用站点
+    DEFAULT_TARGETS = [
+        'https://cn.bing.com',                    # 必应中国（国内优先）
+        'https://www.baidu.com',                  # 百度
+        'https://cdn.aliyundcdntest.com/test_1m', # 阿里云 CDN 测试文件
+        'https://dl.google.com',                  # Google 下载（跨境）
+        'https://www.apple.com',                  # Apple（跨境）
+    ]
+
     def __init__(self, config: Config):
         self.config = config
         self.enabled = config.get('qos_probe_enabled', True)
-        self.probe_targets = config.get('qos_probe_targets', [
-            'https://www.google.co.jp',   # 日本 Google
-            'https://www.yahoo.co.jp',    # 日本雅虎
-            'https://www.amazon.co.jp',   # 日本亚马逊
-        ])
+        self.probe_targets = config.get('qos_probe_targets', self.DEFAULT_TARGETS)
         self.probe_count = config.get('qos_probe_count', 5)  # 每次探测的请求次数
         self.history_file = QOS_STATS_FILE
         self.history: List[Dict] = []
         self._load_history()
 
-        # QoS 阈值（针对日本线路）
+        # QoS 阈值
         self.latency_threshold = 100      # 延迟阈值 (ms)
         self.jitter_threshold = 30        # 抖动阈值 (ms)
         self.loss_threshold = 5           # 丢包阈值 (%)
+        self.last_error = ""              # 最近一次探测的错误信息
 
     def _load_history(self):
         """加载历史探测数据"""
@@ -284,15 +312,10 @@ class QoSProbe:
 
     def _save_history(self):
         """保存探测历史"""
-        try:
-            os.makedirs(os.path.dirname(self.history_file), exist_ok=True)
-            # 只保留最近 1000 条记录
-            if len(self.history) > 1000:
-                self.history = self.history[-1000:]
-            with open(self.history_file, 'w', encoding='utf-8') as f:
-                json.dump(self.history, f, indent=2)
-        except (IOError, OSError):
-            pass
+        # 只保留最近 1000 条记录
+        if len(self.history) > 1000:
+            self.history = self.history[-1000:]
+        atomic_write_json(self.history_file, self.history)
 
     def probe_single(self, url: str) -> Dict:
         """对单个目标进行 HTTP 探测"""
@@ -301,31 +324,37 @@ class QoSProbe:
             'success': False,
             'latency': 0,
             'status_code': 0,
+            'error': '',
         }
 
         start = None
         try:
-            # 随机 User-Agent
             ua = random.choice(USER_AGENTS)
             headers = {'User-Agent': ua}
 
             start = time.time()
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=5, context=SSL_CONTEXT) as resp:
+            with urllib.request.urlopen(req, timeout=8, context=SSL_CONTEXT_SAFE) as resp:
                 latency = (time.time() - start) * 1000  # ms
                 result['latency'] = latency
                 result['status_code'] = resp.status
                 result['success'] = True
 
         except urllib.error.HTTPError as e:
-            # HTTP 错误也算成功（能连接上）
+            # HTTP 错误也算成功（能连接上说明网络通）
             if start is not None:
                 result['latency'] = (time.time() - start) * 1000
             result['status_code'] = e.code
-            result['success'] = True  # 能收到 HTTP 响应说明网络通
+            result['success'] = True
+        except urllib.error.URLError as e:
+            result['error'] = f"连接失败: {e.reason}"
+            log_message("WARN", f"QoS 探测 {url} 失败: {e.reason}", throttle_key=f"qos_{url}")
+        except TimeoutError:
+            result['error'] = "超时(8s)"
+            log_message("WARN", f"QoS 探测 {url} 超时", throttle_key=f"qos_{url}")
         except Exception as e:
-            result['latency'] = -1
-            result['success'] = False
+            result['error'] = str(e)
+            log_message("WARN", f"QoS 探测 {url} 异常: {e}", throttle_key=f"qos_{url}")
 
         return result
 
@@ -338,40 +367,52 @@ class QoSProbe:
         targets = self.probe_targets.copy()
         random.shuffle(targets)
 
-        # 只探测随机 2-3 个目标（减少特征）
-        probe_count = min(random.randint(2, 3), len(targets))
+        # 探测所有目标（至少 2 个，最多 3 个）
+        probe_count = min(max(2, len(targets)), 3, len(targets))
         selected_targets = targets[:probe_count]
 
         results = []
+        failed_targets = []
         for target in selected_targets:
-            # 随机延迟 0.5-2 秒（避免规律性）
-            time.sleep(random.uniform(0.5, 2.0))
+            time.sleep(random.uniform(0.5, 1.5))
 
             result = self.probe_single(target)
             results.append(result)
 
+            if not result['success']:
+                failed_targets.append(f"{target} ({result.get('error', '未知')})")
+
             # 多次测量同一目标
             if self.probe_count > 1:
                 for _ in range(self.probe_count - 1):
-                    time.sleep(random.uniform(0.3, 1.0))
+                    time.sleep(random.uniform(0.3, 0.8))
                     r = self.probe_single(target)
-                    if r['success']:
-                        results.append(r)
+                    results.append(r)
 
         # 汇总结果
         successful = [r for r in results if r['success']]
         if not successful:
-            return {
+            error_detail = "; ".join(failed_targets[:3]) if failed_targets else "无目标"
+            self.last_error = f"所有目标不可达: {error_detail}"
+            log_message("WARN", f"QoS 探测全部失败 — {self.last_error}")
+            error_result = {
                 'enabled': True,
                 'timestamp': time.time(),
                 'status': 'error',
-                'message': '所有探测目标不可达',
+                'qos_level': 'error',
+                'message': self.last_error,
                 'latency_avg': 0,
                 'latency_min': 0,
                 'latency_max': 0,
                 'jitter': 0,
                 'loss': 100,
+                'qos_reasons': [self.last_error],
+                'probe_count': 0,
+                'failed_targets': failed_targets,
             }
+            self.history.append(error_result)
+            self._save_history()
+            return error_result
 
         # 计算统计
         latencies = [r['latency'] for r in successful]
@@ -456,6 +497,17 @@ class QoSProbe:
 
         latest = self.history[-1]
         level = latest.get('qos_level', 'unknown')
+        loss = latest.get('loss', 0)
+
+        # 全部失败时显示具体原因
+        if level == 'error' or loss >= 100:
+            if self.last_error:
+                # 截取关键信息，避免太长
+                short_err = self.last_error.split(";")[0] if ";" in self.last_error else self.last_error
+                if len(short_err) > 40:
+                    short_err = short_err[:37] + "..."
+                return f"✗ 探测失败 ({short_err})"
+            return "✗ 所有目标不可达"
 
         if level == 'good':
             return f"✓ 正常 ({latest.get('latency_avg', 0):.0f}ms)"
@@ -512,11 +564,7 @@ class URLPool:
             self.url_health = {}
 
     def _save_health_data(self):
-        try:
-            with open(self.health_file, 'w', encoding='utf-8') as f:
-                json.dump(self.url_health, f, indent=2)
-        except (IOError, OSError):
-            pass
+        atomic_write_json(self.health_file, self.url_health)
 
     def _cleanup_old_health_data(self):
         week_ago = time.time() - 7 * 86400
@@ -597,7 +645,7 @@ class URLPool:
                 "https://cn.bing.com/HPImageArchive.aspx?format=js&idx=0&n=5",
                 headers=self._get_request_headers()
             )
-            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT, context=SSL_CONTEXT) as resp:
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT, context=SSL_CONTEXT_SAFE) as resp:
                 for img in json.loads(resp.read().decode('utf-8')).get('images', []):
                     if img.get('url'):
                         urls.append(f"https://cn.bing.com{img['url']}")
@@ -613,7 +661,7 @@ class URLPool:
                 "https://en.wikipedia.org/api/rest_v1/page/random/summary",
                 headers=self._get_request_headers()
             )
-            with urllib.request.urlopen(req, timeout=8, context=SSL_CONTEXT) as resp:
+            with urllib.request.urlopen(req, timeout=8, context=SSL_CONTEXT_SAFE) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
                 for key in ('thumbnail', 'originalimage'):
                     src = data.get(key, {}).get('source')
@@ -1015,12 +1063,7 @@ class Scheduler:
             self.daily_quota_used = 0
 
     def _save_usage_to_disk(self):
-        try:
-            os.makedirs(os.path.dirname(self.usage_file), exist_ok=True)
-            with open(self.usage_file, 'w', encoding='utf-8') as f:
-                json.dump({"date": self.current_date, "used_bytes": self.daily_quota_used}, f)
-        except (IOError, OSError):
-            pass
+        atomic_write_json(self.usage_file, {"date": self.current_date, "used_bytes": self.daily_quota_used})
 
     def _reset_daily_quota_if_needed(self):
         today = datetime.now().strftime("%Y-%m-%d")
@@ -1097,11 +1140,9 @@ class BaseNotifier:
         today = now.strftime("%Y-%m-%d")
         current_hour = now.hour
 
-        # 只在推送时间的整点检查（允许 ±30 分钟窗口）
+        # 只在推送时间的整点触发
         if current_hour != self.report_hour:
-            # 检查是否在 report_hour:00 到 report_hour:59 之间
-            if not (current_hour == self.report_hour and now.minute < 60):
-                return False
+            return False
 
         if today == self.last_report_date:
             return False
@@ -1216,7 +1257,7 @@ class TelegramNotifier(BaseNotifier):
             url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
             data = json.dumps({"chat_id": self.chat_id, "text": text, "parse_mode": "HTML"}).encode('utf-8')
             req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=15, context=SSL_CONTEXT) as resp:
+            with urllib.request.urlopen(req, timeout=15, context=SSL_CONTEXT_SAFE) as resp:
                 return resp.status == 200
         except Exception as e:
             log_message("WARN", f"TG 推送失败: {e}", throttle_key="tg_fail")
@@ -1386,7 +1427,7 @@ class DingTalkNotifier(BaseNotifier):
                 }
             }).encode('utf-8')
             req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=15, context=SSL_CONTEXT) as resp:
+            with urllib.request.urlopen(req, timeout=15, context=SSL_CONTEXT_SAFE) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
                 return result.get('errcode') == 0
         except Exception as e:
@@ -1578,7 +1619,7 @@ class HealthChecker:
             try:
                 req = urllib.request.Request(url, method='HEAD')
                 req.add_header('User-Agent', random.choice(USER_AGENTS))
-                with urllib.request.urlopen(req, timeout=5, context=SSL_CONTEXT) as resp:
+                with urllib.request.urlopen(req, timeout=5, context=SSL_CONTEXT_SAFE) as resp:
                     if resp.status < 400:
                         return True
             except Exception:
@@ -1665,15 +1706,10 @@ class TrafficPaddingService:
 
     def _save_traffic_history(self):
         """保存流量历史记录"""
-        try:
-            os.makedirs(os.path.dirname(self.traffic_history_file), exist_ok=True)
-            # 只保留最近 10000 条记录
-            if len(self.traffic_history) > 10000:
-                self.traffic_history = self.traffic_history[-10000:]
-            with open(self.traffic_history_file, 'w', encoding='utf-8') as f:
-                json.dump(self.traffic_history, f, indent=2)
-        except (IOError, OSError):
-            pass
+        # 只保留最近 10000 条记录
+        if len(self.traffic_history) > 10000:
+            self.traffic_history = self.traffic_history[-10000:]
+        atomic_write_json(self.traffic_history_file, self.traffic_history)
 
     def record_traffic_snapshot(self):
         """记录当前流量快照"""
@@ -1784,11 +1820,15 @@ class TrafficPaddingService:
 
     def _init_network_baseline(self):
         """初始化网卡流量基准"""
+        iface = self.config.get('interface', 'eth0')
         try:
             with open('/proc/net/dev', 'r') as f:
                 for line in f:
-                    if self.config.get('interface', 'eth0') in line and ':' in line:
-                        fields = line.split(':')[1].split()
+                    if ':' not in line:
+                        continue
+                    name, data = line.split(':', 1)
+                    if name.strip() == iface:
+                        fields = data.split()
                         self.start_rx_bytes = int(fields[0])
                         self.start_tx_bytes = int(fields[8])
                         break
@@ -1797,13 +1837,17 @@ class TrafficPaddingService:
 
     def get_network_stats(self) -> Dict:
         """获取网卡流量统计"""
+        iface = self.config.get('interface', 'eth0')
         current_rx = 0
         current_tx = 0
         try:
             with open('/proc/net/dev', 'r') as f:
                 for line in f:
-                    if self.config.get('interface', 'eth0') in line and ':' in line:
-                        fields = line.split(':')[1].split()
+                    if ':' not in line:
+                        continue
+                    name, data = line.split(':', 1)
+                    if name.strip() == iface:
+                        fields = data.split()
                         current_rx = int(fields[0])
                         current_tx = int(fields[8])
                         break
@@ -1864,23 +1908,16 @@ class TrafficPaddingService:
 
     def _save_stats(self):
         """保存统计数据"""
-        try:
-            os.makedirs(os.path.dirname(self.stats_file), exist_ok=True)
-            # 清理超过 90 天的旧数据
-            cutoff = datetime.now().strftime("%Y-%m-%d")
-            cutoff_ts = datetime.now().timestamp() - 90 * 86400
-            self.daily_stats = {
-                k: v for k, v in self.daily_stats.items()
-                if datetime.strptime(k, "%Y-%m-%d").timestamp() > cutoff_ts
-            }
-            data = {
-                'total_downloaded': self.total_downloaded_all_time,
-                'daily_stats': self.daily_stats
-            }
-            with open(self.stats_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
-        except (IOError, OSError):
-            pass
+        # 清理超过 90 天的旧数据
+        cutoff_ts = datetime.now().timestamp() - 90 * 86400
+        self.daily_stats = {
+            k: v for k, v in self.daily_stats.items()
+            if datetime.strptime(k, "%Y-%m-%d").timestamp() > cutoff_ts
+        }
+        atomic_write_json(self.stats_file, {
+            'total_downloaded': self.total_downloaded_all_time,
+            'daily_stats': self.daily_stats
+        })
 
     def record_download(self, bytes_downloaded: int):
         """记录下载量"""

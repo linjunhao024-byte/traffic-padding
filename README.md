@@ -188,10 +188,11 @@ Traffic-Tadding/                   /opt/traffic-padding/
     "dingtalk_report_hour": 23,       // 推送时间 (24小时制)
     "dingtalk_monthly_reset_day": 1,  // 月额度重置日（月报用）
     "qos_probe_enabled": true,        // 启用 QoS 探测
-    "qos_probe_targets": [            // 探测目标（日本网站）
-        "https://www.google.co.jp",  // 日本 Google
-        "https://www.yahoo.co.jp",   // 日本雅虎
-        "https://www.amazon.co.jp"   // 日本亚马逊
+    "qos_probe_targets": [            // 探测目标（国内外混合）
+        "https://cn.bing.com",       // 必应中国（国内优先）
+        "https://www.baidu.com",     // 百度
+        "https://dl.google.com",     // Google（跨境）
+        "https://www.apple.com"      // Apple（跨境）
     ],
     "qos_probe_count": 5              // 每次探测的请求次数
 }
