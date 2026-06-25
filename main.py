@@ -537,7 +537,7 @@ class BandwidthMonitor:
 class AIAnalyzer:
     """后台线程：每小时调用 AI 模型分析带宽和填充数据"""
 
-    API_PATH = "/v1/chat/completions"
+    API_PATH = "/chat/completions"
 
     def __init__(self, config, service_ref=None):
         self.config = config
