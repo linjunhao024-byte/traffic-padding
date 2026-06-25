@@ -197,6 +197,7 @@ class BandwidthMonitor:
         # 告警状态
         self._alert_state = "normal"  # normal / alert
         self._alert_last_ts = 0
+        self._alert_start_ts = 0  # 告警开始时间
 
         # 流量累计（字节，用于报告）
         self._today_rx_bytes = 0
@@ -245,51 +246,51 @@ class BandwidthMonitor:
         now = time.time()
         time_delta = max(0.1, now - self.prev_ts)
 
-        # 计算 Mbps
-        rx_speed = max(0.0, (rx - self.prev_rx) * 8 / 1_000_000 / time_delta)
-        tx_speed = max(0.0, (tx - self.prev_tx) * 8 / 1_000_000 / time_delta)
+        # 计算 Mbps（处理计数器溢出）
+        rx_delta = calculate_counter_delta(self.prev_rx, rx, COUNTER_MAX_64BIT)
+        tx_delta = calculate_counter_delta(self.prev_tx, tx, COUNTER_MAX_64BIT)
+        rx_speed = max(0.0, rx_delta * 8 / 1_000_000 / time_delta)
+        tx_speed = max(0.0, tx_delta * 8 / 1_000_000 / time_delta)
         total_speed = rx_speed + tx_speed
 
-        # 累计流量字节（在更新 prev 之前计算差值）
-        rx_delta = rx - self.prev_rx if rx >= self.prev_rx else 0
-        tx_delta = tx - self.prev_tx if tx >= self.prev_tx else 0
-        self._today_rx_bytes += int(rx_delta)
-        self._today_tx_bytes += int(tx_delta)
+        # 累计流量字节
+        self._today_rx_bytes += rx_delta
+        self._today_tx_bytes += tx_delta
 
         self.prev_rx = rx
         self.prev_tx = tx
         self.prev_ts = now
 
-        # 更新缓存
+        # 更新缓存和今日统计（加锁）
         with self._lock:
             self._latest_rx_speed = rx_speed
             self._latest_tx_speed = tx_speed
             self._latest_total_speed = total_speed
 
-        # 分钟累积
-        if rx_speed > self.min_rx_peak:
-            self.min_rx_peak = rx_speed
-        if tx_speed > self.min_tx_peak:
-            self.min_tx_peak = tx_speed
-        self.min_rx_sum += rx_speed
-        self.min_tx_sum += tx_speed
-        self.sample_count += 1
+            # 分钟累积
+            if rx_speed > self.min_rx_peak:
+                self.min_rx_peak = rx_speed
+            if tx_speed > self.min_tx_peak:
+                self.min_tx_peak = tx_speed
+            self.min_rx_sum += rx_speed
+            self.min_tx_sum += tx_speed
+            self.sample_count += 1
 
-        # 今日统计
-        now_str = datetime.now().strftime("%H:%M")
-        if rx_speed > self._today_rx_peak:
-            self._today_rx_peak = rx_speed
-            self._today_rx_peak_time = now_str
-        if tx_speed > self._today_tx_peak:
-            self._today_tx_peak = tx_speed
-            self._today_tx_peak_time = now_str
-        if total_speed > self._today_total_peak:
-            self._today_total_peak = total_speed
-            self._today_total_peak_time = now_str
-        self._today_rx_sum += rx_speed
-        self._today_tx_sum += tx_speed
-        self._today_total_sum += total_speed
-        self._today_samples += 1
+            # 今日统计
+            now_str = datetime.now().strftime("%H:%M")
+            if rx_speed > self._today_rx_peak:
+                self._today_rx_peak = rx_speed
+                self._today_rx_peak_time = now_str
+            if tx_speed > self._today_tx_peak:
+                self._today_tx_peak = tx_speed
+                self._today_tx_peak_time = now_str
+            if total_speed > self._today_total_peak:
+                self._today_total_peak = total_speed
+                self._today_total_peak_time = now_str
+            self._today_rx_sum += rx_speed
+            self._today_tx_sum += tx_speed
+            self._today_total_sum += total_speed
+            self._today_samples += 1
 
         # 日期切换
         today = datetime.now().strftime("%Y-%m-%d")
@@ -356,24 +357,25 @@ class BandwidthMonitor:
             }
 
     def get_today_stats(self) -> Dict:
-        """获取今日带宽统计"""
-        samples = max(1, self._today_samples)
-        return {
-            'date': self._today_date,
-            'rx_peak': self._today_rx_peak,
-            'rx_peak_time': self._today_rx_peak_time,
-            'tx_peak': self._today_tx_peak,
-            'tx_peak_time': self._today_tx_peak_time,
-            'total_peak': self._today_total_peak,
-            'total_peak_time': self._today_total_peak_time,
-            'rx_avg': self._today_rx_sum / samples,
-            'tx_avg': self._today_tx_sum / samples,
-            'total_avg': self._today_total_sum / samples,
-            'samples': self._today_samples,
-            'alert_count': self._today_alert_count,
-            'rx_bytes': self._today_rx_bytes,
-            'tx_bytes': self._today_tx_bytes,
-        }
+        """获取今日带宽统计（线程安全快照）"""
+        with self._lock:
+            samples = max(1, self._today_samples)
+            return {
+                'date': self._today_date,
+                'rx_peak': self._today_rx_peak,
+                'rx_peak_time': self._today_rx_peak_time,
+                'tx_peak': self._today_tx_peak,
+                'tx_peak_time': self._today_tx_peak_time,
+                'total_peak': self._today_total_peak,
+                'total_peak_time': self._today_total_peak_time,
+                'rx_avg': self._today_rx_sum / samples,
+                'tx_avg': self._today_tx_sum / samples,
+                'total_avg': self._today_total_sum / samples,
+                'samples': self._today_samples,
+                'alert_count': self._today_alert_count,
+                'rx_bytes': self._today_rx_bytes,
+                'tx_bytes': self._today_tx_bytes,
+            }
 
     def _check_alert(self, rx_speed: float, tx_speed: float, total_speed: float):
         """带宽告警检查"""
@@ -390,6 +392,8 @@ class BandwidthMonitor:
                 return
             self._alert_state = "alert"
             self._alert_last_ts = now
+            if self._alert_start_ts == 0:
+                self._alert_start_ts = now
             self._today_alert_count += 1
 
             over_pct = ((total_speed - threshold) / threshold * 100) if threshold > 0 else 0
@@ -408,8 +412,9 @@ class BandwidthMonitor:
                 self.notifier_callback("⚠️ 带宽告警", msg, "bandwidth_alert")
 
         elif self._alert_state == "alert" and recovery:
-            duration = int(now - self._alert_last_ts)
+            duration = int(now - self._alert_start_ts) if self._alert_start_ts > 0 else int(now - self._alert_last_ts)
             self._alert_state = "normal"
+            self._alert_start_ts = 0
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             log_message("INFO", f"带宽恢复: {total_speed:.1f}Mbps, 告警持续 {duration // 60} 分钟")
 
@@ -637,11 +642,12 @@ class AIAnalyzer:
                 try:
                     with open(csv_file, 'r') as f:
                         all_lines = f.readlines()
-                    # 取最近 60 行（1 小时）
-                    recent = all_lines[-60:] if len(all_lines) > 60 else all_lines[1:]
-                    if len(recent) > 1:
-                        rx_vals = [float(l.split(',')[4]) for l in recent[1:] if ',' in l]
-                        tx_vals = [float(l.split(',')[5]) for l in recent[1:] if ',' in l]
+                    # 取最近 60 行数据（跳过表头）
+                    data_lines = all_lines[1:]  # 跳过表头
+                    recent = data_lines[-60:] if len(data_lines) > 60 else data_lines
+                    if recent:
+                        rx_vals = [float(l.split(',')[4]) for l in recent if ',' in l]
+                        tx_vals = [float(l.split(',')[5]) for l in recent if ',' in l]
                         if rx_vals:
                             lines.append(f"近1小时入站: 均值{sum(rx_vals)/len(rx_vals):.1f}Mbps, 最大{max(rx_vals):.1f}Mbps, 最小{min(rx_vals):.1f}Mbps")
                             lines.append(f"近1小时出站: 均值{sum(tx_vals)/len(tx_vals):.1f}Mbps, 最大{max(tx_vals):.1f}Mbps, 最小{min(tx_vals):.1f}Mbps")

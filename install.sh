@@ -2197,7 +2197,7 @@ show_success() {
     printf "${GREEN}|${NC}    ${CYAN}%-44s${NC} 热重载     ${GREEN}|${NC}\n" "${CONFIG_DIR}/config.json"
     echo -e "${GREEN}|${NC}                                                                              ${GREEN}|${NC}"
     echo -e "${GREEN}|${NC}  ${BOLD}自动面板:${NC}  下次登录服务器将自动打开管理菜单                             ${GREEN}|${NC}"
-    echo -e "${GREEN}|${NC}            （菜单中选 [15] 可关闭）                                          ${GREEN}|${NC}"
+    echo -e "${GREEN}|${NC}            （菜单中选 [14] 可关闭）                                          ${GREEN}|${NC}"
     echo -e "${GREEN}|${NC}                                                                              ${GREEN}|${NC}"
     echo -e "${GREEN}+===============================================================================+═══════════════════════════════════════════════════════════════════════════════╣${NC}"
     echo -e "${GREEN}|${NC}  如果这个项目对你有帮助，请给一个 ${YELLOW}⭐ Star${NC}！                                  ${GREEN}|${NC}"
