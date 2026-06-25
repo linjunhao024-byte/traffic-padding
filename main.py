@@ -154,7 +154,7 @@ def calculate_counter_delta(prev: int, curr: int, max_val: int) -> int:
 class BandwidthMonitor:
     """后台线程：每秒采样网卡带宽，每分钟写CSV，触发告警"""
 
-    def __init__(self, interface: str, config: Config, notifier_callback=None):
+    def __init__(self, interface: str, config, notifier_callback=None):
         self.interface = interface
         self.config = config
         self.notifier_callback = notifier_callback  # (title, msg) → 发送通知
@@ -539,7 +539,7 @@ class AIAnalyzer:
 
     API_PATH = "/v1/chat/completions"
 
-    def __init__(self, config: Config, service_ref=None):
+    def __init__(self, config, service_ref=None):
         self.config = config
         self.service_ref = service_ref  # 延迟绑定 TrafficPaddingService
         self.running = False
