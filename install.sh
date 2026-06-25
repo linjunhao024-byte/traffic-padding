@@ -1121,6 +1121,12 @@ do_update() {
         cp "${INSTALL_DIR}/tpm.sh.bak" "${INSTALL_DIR}/tpm.sh" 2>/dev/null
     fi
 
+    # 自动开启登录面板（兼容旧版安装）
+    if ! grep -q "tpm$" ~/.bashrc 2>/dev/null; then
+        echo "# Traffic Padding 管理面板" >> ~/.bashrc
+        echo "tpm" >> ~/.bashrc
+    fi
+
     echo ""
     echo -e "${GREEN}  ✅ 更新完成！${NC}"
     echo ""
