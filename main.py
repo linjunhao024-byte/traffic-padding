@@ -2445,7 +2445,7 @@ class TrafficPaddingService:
         }
 
     def _load_stats(self):
-        """加载历史统计数据"""
+        """加载历史统计数据，校准今日数据"""
         try:
             if os.path.exists(self.stats_file):
                 with open(self.stats_file, 'r', encoding='utf-8') as f:
@@ -2453,6 +2453,21 @@ class TrafficPaddingService:
                     self.total_downloaded_all_time = data.get('total_downloaded', 0)
                     self.daily_stats = data.get('daily_stats', {})
                     log_message("INFO", f"加载统计数据: 总用量 {self.total_downloaded_all_time / (1024**3):.3f} GB")
+
+            # 校准今日数据：用 traffic_history 的累计量重新计算
+            # 防止重启后继承旧实例的今日统计
+            today = datetime.now().strftime("%Y-%m-%d")
+            if today in self.daily_stats and self.traffic_history:
+                # 找到今日最早的记录
+                today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+                today_records = [h for h in self.traffic_history if h.get('timestamp', 0) >= today_start]
+                if today_records:
+                    first_dl = today_records[0].get('download_bytes', 0)
+                    last_dl = today_records[-1].get('download_bytes', 0)
+                    actual_today = max(0, last_dl - first_dl)
+                    if abs(self.daily_stats[today] - actual_today) > 10 * 1024 * 1024:  # 差异超过10MB
+                        log_message("INFO", f"校准今日统计: {self.daily_stats[today] / (1024**3):.3f} → {actual_today / (1024**3):.3f} GB")
+                        self.daily_stats[today] = actual_today
         except (json.JSONDecodeError, IOError):
             self.total_downloaded_all_time = 0
             self.daily_stats = {}
