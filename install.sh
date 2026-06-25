@@ -590,6 +590,7 @@ do_uninstall() {
     rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
     systemctl daemon-reload
     rm -f "/usr/local/bin/tpm"
+    [[ -n "$CMD_NAME" ]] && rm -f "/usr/local/bin/${CMD_NAME}"
     rm -rf "/opt/traffic-padding"
 
     echo ""
