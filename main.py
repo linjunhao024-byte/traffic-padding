@@ -2697,8 +2697,7 @@ class TrafficPaddingService:
                 f"├ 延迟: {result.get('latency_avg', 0):.0f}ms\n"
                 f"├ 抖动: {result.get('jitter', 0):.0f}ms\n"
                 f"└ 丢包: {result.get('loss', 0):.0f}%\n\n"
-                f"⚠️ 原因\n{reasons_str}\n\n"
-                f"💡 晚高峰期间属正常现象，通常在 23:00 后恢复。"
+                f"⚠️ 原因\n{reasons_str}"
             )
 
         if self.dingtalk_notifier.enabled:
@@ -2710,8 +2709,7 @@ class TrafficPaddingService:
                 f"- 延迟: {result.get('latency_avg', 0):.0f}ms\n"
                 f"- 抖动: {result.get('jitter', 0):.0f}ms\n"
                 f"- 丢包: {result.get('loss', 0):.0f}%\n\n"
-                f"### ⚠️ 原因\n{reasons_str}\n\n"
-                f"> 💡 晚高峰期间属正常现象，通常在 23:00 后恢复。"
+                f"### ⚠️ 原因\n{reasons_str}"
             )
 
         log_message("WARN", "已发送 QoS 告警")
