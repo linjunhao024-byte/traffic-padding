@@ -1980,13 +1980,21 @@ class TelegramNotifier(BaseNotifier):
         bw_str = ""
         if d['bw_today']:
             bt = d['bw_today']
+            # 智能单位：大于1GB用GB，否则用MB
+            def fmt_bytes(b):
+                if b >= 1024**3:
+                    return f"{b / (1024**3):.2f} GB"
+                elif b >= 1024**2:
+                    return f"{b / (1024**2):.1f} MB"
+                else:
+                    return f"{b / 1024:.0f} KB"
             bw_str = f"""
 📊 带宽监控
 ├ 入站峰值: {bt['rx_peak']:.1f} Mbps ({bt['rx_peak_time']})
 ├ 出站峰值: {bt['tx_peak']:.1f} Mbps ({bt['tx_peak_time']})
 ├ 入站平均: {bt['rx_avg']:.1f} Mbps
 ├ 出站平均: {bt['tx_avg']:.1f} Mbps
-├ 总流量: RX {bt['rx_bytes'] / (1024**3):.2f} GB / TX {bt['tx_bytes'] / (1024**3):.2f} GB
+├ 总流量: RX {fmt_bytes(bt['rx_bytes'])} / TX {fmt_bytes(bt['tx_bytes'])}
 └ 告警: {bt['alert_count']} 次"""
 
         # AI 分析段
@@ -2083,27 +2091,28 @@ class DingTalkNotifier(BaseNotifier):
 
     def _draw_traffic_chart(self, service: 'TrafficPaddingService') -> str:
         """生成横向流量柱状图（用带宽监控 CSV 数据）"""
-        # 用今日带宽统计
         bw_today = None
         if service.bandwidth_monitor:
             bw_today = service.bandwidth_monitor.get_today_stats()
 
-        # 用填充统计
         stats = service.downloader.get_stats()
         download_mb = stats['total_downloaded_mb']
 
         rx_mb = bw_today['rx_bytes'] / (1024 * 1024) if bw_today else 0
         tx_mb = bw_today['tx_bytes'] / (1024 * 1024) if bw_today else 0
 
-        if rx_mb == 0 and tx_mb == 0 and download_mb == 0:
+        if rx_mb < 0.01 and tx_mb < 0.01 and download_mb < 0.01:
             return ""
 
-        max_val = max(rx_mb, tx_mb, download_mb, 1)
+        max_val = max(rx_mb, tx_mb, download_mb, 0.01)
 
         def draw_bar(label, value, width=20):
             filled = int((value / max_val) * width) if max_val > 0 else 0
             bar = '█' * filled + '░' * (width - filled)
-            return f"{label} {bar} {value:.1f}MB"
+            if value >= 1:
+                return f"{label} {bar} {value:.1f}MB"
+            else:
+                return f"{label} {bar} {value*1024:.0f}KB"
 
         return f"""### 📊 流量柱状图
 {draw_bar('RX ', rx_mb)}
@@ -2141,13 +2150,20 @@ class DingTalkNotifier(BaseNotifier):
         bw_str = ""
         if d['bw_today']:
             bt = d['bw_today']
+            def fmt_bytes(b):
+                if b >= 1024**3:
+                    return f"{b / (1024**3):.2f} GB"
+                elif b >= 1024**2:
+                    return f"{b / (1024**2):.1f} MB"
+                else:
+                    return f"{b / 1024:.0f} KB"
             bw_str = f"""
 ### 📊 带宽监控
 - 入站峰值: {bt['rx_peak']:.1f} Mbps ({bt['rx_peak_time']})
 - 出站峰值: {bt['tx_peak']:.1f} Mbps ({bt['tx_peak_time']})
 - 入站平均: {bt['rx_avg']:.1f} Mbps
 - 出站平均: {bt['tx_avg']:.1f} Mbps
-- 总流量: RX {bt['rx_bytes'] / (1024**3):.2f} GB / TX {bt['tx_bytes'] / (1024**3):.2f} GB
+- 总流量: RX {fmt_bytes(bt['rx_bytes'])} / TX {fmt_bytes(bt['tx_bytes'])}
 - 告警: {bt['alert_count']} 次"""
 
         # AI 分析段
