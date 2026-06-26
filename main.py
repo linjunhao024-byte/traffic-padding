@@ -1651,11 +1651,8 @@ class Scheduler:
                 with open(self.usage_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     if data.get('date') == self.current_date:
-                        old_used = data.get('used_bytes', 0)
-                        if old_used > 0:
-                            self.daily_quota_used = 0
-                            self._save_usage_to_disk()
-                            log_message("INFO", f"重启校准: 配额归零 (之前: {old_used / (1024**3):.3f} GB)")
+                        self.daily_quota_used = data.get('used_bytes', 0)
+                        log_message("INFO", f"恢复今日配额: {self.daily_quota_used / (1024**3):.3f} GB")
                     else:
                         self._save_usage_to_disk()
         except (json.JSONDecodeError, IOError):
@@ -2495,14 +2492,10 @@ class TrafficPaddingService:
                     self.daily_stats = data.get('daily_stats', {})
                     log_message("INFO", f"加载统计数据: 总用量 {self.total_downloaded_all_time / (1024**3):.3f} GB")
 
-            # 校准今日数据：重启后今日应从 0 开始
-            # 累计总量保留，但今日计数器归零
+            # 保留今日数据（不归零，防止重启丢失进度）
             today = datetime.now().strftime("%Y-%m-%d")
             if today in self.daily_stats:
-                old_today = self.daily_stats[today]
-                if old_today > 0:
-                    self.daily_stats[today] = 0
-                    log_message("INFO", f"重启校准: 今日统计归零 (之前: {old_today / (1024**3):.3f} GB)")
+                log_message("INFO", f"恢复今日统计: {self.daily_stats[today] / (1024**3):.3f} GB")
         except (json.JSONDecodeError, IOError):
             self.total_downloaded_all_time = 0
             self.daily_stats = {}
@@ -2606,6 +2599,13 @@ class TrafficPaddingService:
         log_message("INFO", "=" * 65)
 
     def run_cycle(self):
+        try:
+            self._run_cycle_inner()
+        except Exception as e:
+            log_message("ERROR", f"运行周期异常: {e}")
+            # 不崩溃，继续下一个周期
+
+    def _run_cycle_inner(self):
         self.cycle_count += 1
         self.config.check_and_reload()
 
