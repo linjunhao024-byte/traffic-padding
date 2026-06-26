@@ -1022,22 +1022,23 @@ try:
     with open(nf) as f: n = json.load(f)
     defaults.update(n)
 except: pass
-for k in ['report_daily','report_monthly','bandwidth_alert','bandwidth_alert_recovery','qos_alert','service_start_stop','first_test']:
+for k in ['report_daily','report_weekly','report_monthly','bandwidth_alert','bandwidth_alert_recovery','qos_alert','service_start_stop','first_test']:
     print('已开启' if defaults.get(k,True) else '已关闭')
 " 2>/dev/null)
                     local n_daily=$(echo "$notify_info" | sed -n '1p')
-                    local n_monthly=$(echo "$notify_info" | sed -n '2p')
-                    local n_alert=$(echo "$notify_info" | sed -n '3p')
-                    local n_recovery=$(echo "$notify_info" | sed -n '4p')
-                    local n_qos=$(echo "$notify_info" | sed -n '5p')
-                    local n_startstop=$(echo "$notify_info" | sed -n '6p')
-                    local n_first=$(echo "$notify_info" | sed -n '7p')
+                    local n_weekly=$(echo "$notify_info" | sed -n '2p')
+                    local n_monthly=$(echo "$notify_info" | sed -n '3p')
+                    local n_alert=$(echo "$notify_info" | sed -n '4p')
+                    local n_recovery=$(echo "$notify_info" | sed -n '5p')
+                    local n_qos=$(echo "$notify_info" | sed -n '6p')
+                    local n_startstop=$(echo "$notify_info" | sed -n '7p')
+                    local n_first=$(echo "$notify_info" | sed -n '8p')
 
                     echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
                     echo -e "${CYAN}|${NC}  ${BOLD}通知管理${NC}                                                      ${CYAN}|${NC}"
                     echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
                     printf "${CYAN}|${NC}    ${CYAN}[1]${NC} 日报推送        ${GREEN}%-12s${NC}  含带宽+填充数据        ${CYAN}|${NC}\n" "$n_daily"
-                    printf "${CYAN}|${NC}    ${CYAN}[2]${NC} 周报推送        ${GREEN}%-12s${NC}  发送后清理CSV          ${CYAN}|${NC}\n" "$n_daily"
+                    printf "${CYAN}|${NC}    ${CYAN}[2]${NC} 周报推送        ${GREEN}%-12s${NC}  发送后清理CSV          ${CYAN}|${NC}\n" "$n_weekly"
                     printf "${CYAN}|${NC}    ${CYAN}[3]${NC} 月报推送        ${GREEN}%-12s${NC}                            ${CYAN}|${NC}\n" "$n_monthly"
                     printf "${CYAN}|${NC}    ${CYAN}[4]${NC} 带宽告警        ${GREEN}%-12s${NC}  阈值推送钉钉          ${CYAN}|${NC}\n" "$n_alert"
                     printf "${CYAN}|${NC}    ${CYAN}[5]${NC} 告警恢复通知    ${GREEN}%-12s${NC}                            ${CYAN}|${NC}\n" "$n_recovery"
@@ -1118,23 +1119,6 @@ except:
     else
         echo -e "${DIM}已关闭${NC}"
     fi
-}
-
-get_download_mode() {
-    local mode=$(python3 -c "
-import json
-try:
-    with open('${CONFIG_DIR}/config.json') as f:
-        print(json.load(f).get('download_mode', 'short'))
-except:
-    print('short')
-" 2>/dev/null)
-    case "$mode" in
-        short) echo -e "${GREEN}短时${NC} (2-15MB)" ;;
-        long) echo -e "${YELLOW}长时${NC} (完整文件)" ;;
-        mixed) echo -e "${CYAN}长短结合${NC}" ;;
-        *) echo -e "${GREEN}短时${NC}" ;;
-    esac
 }
 
 set_download_mode() {
