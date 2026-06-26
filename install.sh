@@ -525,7 +525,7 @@ CONFIG_DIR="/etc/traffic-padding"
 show_header() {
     clear
     echo -e "${CYAN}+===========================================================================+${NC}"
-    echo -e "${CYAN}|${NC}  ${BOLD}Traffic Padding Manager v1.0.0${NC}                                       ${CYAN}|${NC}"
+    echo -e "${CYAN}|${NC}  ${BOLD}Traffic Padding Manager v1.1.0${NC}                                       ${CYAN}|${NC}"
     echo -e "${CYAN}+===========================================================================+${NC}"
     echo ""
 }

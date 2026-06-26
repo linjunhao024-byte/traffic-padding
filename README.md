@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.0.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.1.0-blue?style=flat-square" alt="Version">
   <a href="https://github.com/linjunhao024-byte/Traffic-Tadding/stargazers"><img src="https://img.shields.io/github/stars/linjunhao024-byte/Traffic-Tadding?style=flat-square&color=yellow&logo=github&cacheSeconds=60" alt="Stars"></a>
   <a href="https://github.com/linjunhao024-byte/Traffic-Tadding/network/members"><img src="https://img.shields.io/github/forks/linjunhao024-byte/Traffic-Tadding?style=flat-square&color=blue&logo=github&cacheSeconds=60" alt="Forks"></a>
   <a href="https://github.com/linjunhao024-byte/Traffic-Tadding/issues"><img src="https://img.shields.io/github/issues/linjunhao024-byte/Traffic-Tadding?style=flat-square&color=red&logo=github&cacheSeconds=60" alt="Issues"></a>
