@@ -897,35 +897,37 @@ class TrafficMonitor:
 
 
 # ============================================================================
-# QoS 探测（HTTP 方式，安全隐蔽）
+# QoS 探测（TCP ping 方式，国内外分离统计）
 # ============================================================================
 
 class QoSProbe:
-    """跨境网络 QoS 探测器（HTTP 方式）"""
+    """跨境网络 QoS 探测器（TCP ping + 国内外分离）"""
 
-    # 默认探测目标：国内外都能访问的高可用站点
+    # 探测目标：(host, port, category)
+    # category: 'domestic'=国内, 'international'=跨境
     DEFAULT_TARGETS = [
-        'https://cn.bing.com',                    # 必应中国（国内优先）
-        'https://www.baidu.com',                  # 百度
-        'https://cdn.aliyundcdntest.com/test_1m', # 阿里云 CDN 测试文件
-        'https://dl.google.com',                  # Google 下载（跨境）
-        'https://www.apple.com',                  # Apple（跨境）
+        ('www.baidu.com', 443, 'domestic'),
+        ('cn.bing.com', 443, 'domestic'),
+        ('www.qq.com', 443, 'domestic'),
+        ('www.aliyun.com', 443, 'domestic'),
+        ('dl.google.com', 443, 'international'),
+        ('www.apple.com', 443, 'international'),
+        ('www.cloudflare.com', 443, 'international'),
     ]
+
+    # 阈值：国内和跨境分开
+    THRESHOLDS = {
+        'domestic': {'latency_warn': 80, 'latency_bad': 200, 'jitter_warn': 40, 'loss_warn': 10},
+        'international': {'latency_warn': 150, 'latency_bad': 400, 'jitter_warn': 60, 'loss_warn': 15},
+    }
 
     def __init__(self, config: Config):
         self.config = config
         self.enabled = config.get('qos_probe_enabled', True)
-        self.probe_targets = config.get('qos_probe_targets', self.DEFAULT_TARGETS)
-        self.probe_count = config.get('qos_probe_count', 5)  # 每次探测的请求次数
         self.history_file = QOS_STATS_FILE
         self.history: List[Dict] = []
         self._load_history()
-
-        # QoS 阈值
-        self.latency_threshold = 100      # 延迟阈值 (ms)
-        self.jitter_threshold = 30        # 抖动阈值 (ms)
-        self.loss_threshold = 5           # 丢包阈值 (%)
-        self.last_error = ""              # 最近一次探测的错误信息
+        self.last_error = ""
 
     def _load_history(self):
         """加载历史探测数据"""
@@ -946,179 +948,148 @@ class QoSProbe:
             self.history = self.history[-1000:]
         atomic_write_json(self.history_file, self.history)
 
-    def probe_single(self, url: str) -> Dict:
-        """对单个目标进行 HTTP 探测"""
-        result = {
-            'target': url,
-            'success': False,
-            'latency': 0,
-            'status_code': 0,
-            'error': '',
+    def _tcp_ping(self, host: str, port: int, timeout: float = 5.0) -> Tuple[bool, float]:
+        """TCP ping：返回 (成功, 延迟ms)"""
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        start = time.time()
+        try:
+            result = sock.connect_ex((host, port))
+            latency = (time.time() - start) * 1000  # ms
+            if result == 0:
+                return True, latency
+            else:
+                return False, latency
+        except (socket.timeout, socket.error):
+            return False, (time.time() - start) * 1000
+        finally:
+            sock.close()
+
+    def _probe_target(self, host: str, port: int, count: int = 3) -> Tuple[List[float], int]:
+        """对单个目标进行多次 TCP ping，返回 (成功延迟列表, 总次数)"""
+        latencies = []
+        for i in range(count):
+            ok, latency = self._tcp_ping(host, port)
+            if ok:
+                latencies.append(latency)
+            if i < count - 1:
+                time.sleep(random.uniform(0.3, 0.8))
+        return latencies, count
+
+    def _calc_stats(self, latencies: List[float], total: int) -> Dict:
+        """计算统计指标"""
+        if not latencies:
+            return {'avg': 0, 'min': 0, 'max': 0, 'jitter': 0, 'loss': 100, 'count': 0}
+
+        avg = sum(latencies) / len(latencies)
+        jitter = (sum((l - avg) ** 2 for l in latencies) / len(latencies)) ** 0.5 if len(latencies) > 1 else 0
+        loss = ((total - len(latencies)) / total) * 100 if total > 0 else 0
+
+        return {
+            'avg': avg,
+            'min': min(latencies),
+            'max': max(latencies),
+            'jitter': jitter,
+            'loss': loss,
+            'count': len(latencies),
         }
 
-        start = None
-        try:
-            ua = random.choice(USER_AGENTS)
-            headers = {'User-Agent': ua}
-
-            start = time.time()
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=8, context=SSL_CONTEXT_SAFE) as resp:
-                latency = (time.time() - start) * 1000  # ms
-                result['latency'] = latency
-                result['status_code'] = resp.status
-                result['success'] = True
-
-        except urllib.error.HTTPError as e:
-            # HTTP 错误也算成功（能连接上说明网络通）
-            if start is not None:
-                result['latency'] = (time.time() - start) * 1000
-            result['status_code'] = e.code
-            result['success'] = True
-        except urllib.error.URLError as e:
-            result['error'] = f"连接失败: {e.reason}"
-            log_message("WARN", f"QoS 探测 {url} 失败: {e.reason}", throttle_key=f"qos_{url}")
-        except TimeoutError:
-            result['error'] = "超时(8s)"
-            log_message("WARN", f"QoS 探测 {url} 超时", throttle_key=f"qos_{url}")
-        except Exception as e:
-            result['error'] = str(e)
-            log_message("WARN", f"QoS 探测 {url} 异常: {e}", throttle_key=f"qos_{url}")
-
-        return result
+    def _judge(self, stats: Dict, category: str) -> str:
+        """根据阈值判断 QoS 等级"""
+        th = self.THRESHOLDS.get(category, self.THRESHOLDS['domestic'])
+        if stats['loss'] > th['loss_warn'] * 2 or stats['avg'] > th['latency_bad']:
+            return 'bad'
+        if stats['avg'] > th['latency_warn'] or stats['jitter'] > th['jitter_warn'] or stats['loss'] > th['loss_warn']:
+            return 'warning'
+        return 'good'
 
     def probe_all(self) -> Dict:
-        """对所有目标进行探测"""
+        """TCP ping 探测，国内外分离统计"""
         if not self.enabled:
             return {'enabled': False}
 
-        # 随机打乱目标顺序
-        targets = self.probe_targets.copy()
+        targets = self.DEFAULT_TARGETS.copy()
         random.shuffle(targets)
 
-        # 探测所有目标（至少 2 个，最多 3 个）
-        probe_count = min(max(2, len(targets)), 3, len(targets))
-        selected_targets = targets[:probe_count]
+        # 各选 2 个国内 + 2 个跨境
+        domestic_targets = [(h, p) for h, p, c in targets if c == 'domestic'][:2]
+        international_targets = [(h, p) for h, p, c in targets if c == 'international'][:2]
 
-        results = []
+        domestic_latencies = []
+        domestic_total = 0
+        international_latencies = []
+        international_total = 0
         failed_targets = []
-        for target in selected_targets:
-            time.sleep(random.uniform(0.5, 1.5))
 
-            result = self.probe_single(target)
-            results.append(result)
+        for host, port in domestic_targets:
+            time.sleep(random.uniform(0.5, 1.0))
+            latencies, total = self._probe_target(host, port, count=3)
+            domestic_latencies.extend(latencies)
+            domestic_total += total
+            if not latencies:
+                failed_targets.append(f"{host}:{port} (国内)")
 
-            if not result['success']:
-                failed_targets.append(f"{target} ({result.get('error', '未知')})")
+        for host, port in international_targets:
+            time.sleep(random.uniform(0.5, 1.0))
+            latencies, total = self._probe_target(host, port, count=3)
+            international_latencies.extend(latencies)
+            international_total += total
+            if not latencies:
+                failed_targets.append(f"{host}:{port} (跨境)")
 
-            # 多次测量同一目标（只计算延迟，不重复计入失败）
-            if self.probe_count > 1:
-                for _ in range(self.probe_count - 1):
-                    time.sleep(random.uniform(0.3, 0.8))
-                    r = self.probe_single(target)
-                    if r['success']:
-                        results.append(r)  # 成功的计入延迟统计
+        # 分别计算统计
+        domestic_stats = self._calc_stats(domestic_latencies, domestic_total)
+        international_stats = self._calc_stats(international_latencies, international_total)
 
-        # 汇总结果
-        successful = [r for r in results if r['success']]
-        if not successful:
+        # 分别判断等级
+        domestic_level = self._judge(domestic_stats, 'domestic')
+        international_level = self._judge(international_stats, 'international')
+
+        # 综合等级：取最差的
+        level_order = {'good': 0, 'warning': 1, 'bad': 2, 'error': 3}
+        overall_level = domestic_level if level_order.get(domestic_level, 0) >= level_order.get(international_level, 0) else international_level
+
+        # 综合原因
+        qos_reasons = []
+        if domestic_level != 'good':
+            qos_reasons.append(f"国内: {domestic_stats['avg']:.0f}ms / 抖动{domestic_stats['jitter']:.0f}ms / 丢包{domestic_stats['loss']:.0f}%")
+        if international_level != 'good':
+            qos_reasons.append(f"跨境: {international_stats['avg']:.0f}ms / 抖动{international_stats['jitter']:.0f}ms / 丢包{international_stats['loss']:.0f}%")
+        if not qos_reasons:
+            qos_reasons.append("网络正常")
+
+        # 全部失败
+        if not domestic_latencies and not international_latencies:
             error_detail = "; ".join(failed_targets[:3]) if failed_targets else "无目标"
             self.last_error = f"所有目标不可达: {error_detail}"
             log_message("WARN", f"QoS 探测全部失败 — {self.last_error}")
-            error_result = {
-                'enabled': True,
-                'timestamp': time.time(),
-                'status': 'error',
-                'qos_level': 'error',
-                'message': self.last_error,
-                'latency_avg': 0,
-                'latency_min': 0,
-                'latency_max': 0,
-                'jitter': 0,
-                'loss': 100,
-                'qos_reasons': [self.last_error],
-                'probe_count': 0,
-                'failed_targets': failed_targets,
-            }
-            self.history.append(error_result)
-            self._save_history()
-            return error_result
+            overall_level = 'error'
 
-        # 计算统计
-        latencies = [r['latency'] for r in successful]
-        avg_latency = sum(latencies) / len(latencies)
-        min_latency = min(latencies)
-        max_latency = max(latencies)
-
-        # 计算抖动（标准差）
-        if len(latencies) > 1:
-            variance = sum((l - avg_latency) ** 2 for l in latencies) / len(latencies)
-            jitter = variance ** 0.5
-        else:
-            jitter = 0
-
-        # 丢包率
-        total_requests = len(results)
-        failed_requests = total_requests - len(successful)
-        loss = (failed_requests / total_requests) * 100 if total_requests > 0 else 0
-
-        # 判断 QoS 状态
-        qos_level = 'good'  # good, warning, bad
-        qos_reasons = []
-
-        if avg_latency > self.latency_threshold:
-            qos_level = 'warning'
-            qos_reasons.append(f'延迟高 ({avg_latency:.0f}ms)')
-
-        if jitter > self.jitter_threshold:
-            qos_level = 'warning'
-            qos_reasons.append(f'抖动大 ({jitter:.0f}ms)')
-
-        if loss > self.loss_threshold:
-            qos_level = 'bad'
-            qos_reasons.append(f'丢包严重 ({loss:.0f}%)')
-
-        if avg_latency > self.latency_threshold * 2 or loss > self.loss_threshold * 2:
-            qos_level = 'bad'
-
-        # 与历史数据对比
-        if len(self.history) >= 5:
-            recent_avg_latency = sum(h.get('latency_avg', 0) for h in self.history[-5:]) / 5
-            if avg_latency > recent_avg_latency * 1.5 and avg_latency > 80:
-                if qos_level == 'good':
-                    qos_level = 'warning'
-                qos_reasons.append(f'延迟比平时高 {(avg_latency/recent_avg_latency-1)*100:.0f}%')
+        # 记录日志
+        log_message("INFO", f"QoS 探测: 国内={domestic_stats['avg']:.0f}ms 跨境={international_stats['avg']:.0f}ms 等级={overall_level}")
 
         # 保存结果
         result_data = {
             'timestamp': time.time(),
-            'latency_avg': avg_latency,
-            'latency_min': min_latency,
-            'latency_max': max_latency,
-            'jitter': jitter,
-            'loss': loss,
-            'qos_level': qos_level,
+            'domestic': domestic_stats,
+            'international': international_stats,
+            'domestic_level': domestic_level,
+            'international_level': international_level,
+            'qos_level': overall_level,
             'qos_reasons': qos_reasons,
-            'probe_count': len(successful),
+            'latency_avg': (domestic_stats['avg'] + international_stats['avg']) / 2 if domestic_stats['count'] and international_stats['count'] else max(domestic_stats['avg'], international_stats['avg']),
+            'jitter': max(domestic_stats['jitter'], international_stats['jitter']),
+            'loss': max(domestic_stats['loss'], international_stats['loss']),
         }
 
         self.history.append(result_data)
         self._save_history()
 
-        return {
-            'enabled': True,
-            'status': qos_level,
-            'latency_avg': avg_latency,
-            'latency_min': min_latency,
-            'latency_max': max_latency,
-            'jitter': jitter,
-            'loss': loss,
-            'qos_reasons': qos_reasons,
-            'probe_count': len(successful),
-        }
+        return result_data
 
     def get_status_str(self) -> str:
-        """获取 QoS 状态字符串"""
+        """获取 QoS 状态字符串（显示国内+跨境）"""
         if not self.enabled:
             return "未启用"
 
@@ -1127,24 +1098,23 @@ class QoSProbe:
 
         latest = self.history[-1]
         level = latest.get('qos_level', 'unknown')
-        loss = latest.get('loss', 0)
 
-        # 全部失败时显示具体原因
-        if level == 'error' or loss >= 100:
+        if level == 'error':
             if self.last_error:
-                # 截取关键信息，避免太长
                 short_err = self.last_error.split(";")[0] if ";" in self.last_error else self.last_error
                 if len(short_err) > 40:
                     short_err = short_err[:37] + "..."
                 return f"✗ 探测失败 ({short_err})"
             return "✗ 所有目标不可达"
 
-        if level == 'good':
-            return f"✓ 正常 ({latest.get('latency_avg', 0):.0f}ms)"
-        elif level == 'warning':
-            return f"⚠ 轻度拥堵 ({latest.get('latency_avg', 0):.0f}ms)"
-        else:
-            return f"✗ 严重拥堵 ({latest.get('latency_avg', 0):.0f}ms)"
+        # 国内+跨境分开显示
+        d = latest.get('domestic', {})
+        i = latest.get('international', {})
+        d_ms = d.get('avg', 0)
+        i_ms = i.get('avg', 0)
+
+        level_str = {'good': '✓ 正常', 'warning': '⚠ 轻度拥堵', 'bad': '✗ 严重拥堵'}.get(level, level)
+        return f"{level_str} (国内{d_ms:.0f}ms / 跨境{i_ms:.0f}ms)"
 
     def get_trend(self) -> str:
         """获取趋势（最近 1 小时 vs 之前）"""
@@ -1155,6 +1125,18 @@ class QoSProbe:
         hour_ago = now - 3600
 
         recent = [h for h in self.history if h.get('timestamp', 0) > hour_ago]
+        older = [h for h in self.history if h.get('timestamp', 0) <= hour_ago]
+
+        if not recent or not older:
+            return "数据不足"
+
+        recent_avg = sum(h.get('latency_avg', 0) for h in recent) / len(recent)
+        older_avg = sum(h.get('latency_avg', 0) for h in older[-10:]) / min(len(older), 10)
+
+        if recent_avg < older_avg * 0.9:
+            return "↓ 改善中"
+        elif recent_avg > older_avg * 1.1:
+            return "↑ 恶化中"
         older = [h for h in self.history if h.get('timestamp', 0) <= hour_ago]
 
         if not recent or not older:
@@ -2143,16 +2125,18 @@ class DingTalkNotifier(BaseNotifier):
         # URL 健康
         url_health_str = f"\n- 健康: {d['healthy_count']}/{d['url_count']}" if d['healthy_count'] else ""
 
-        # QoS 状态
+        # QoS 状态（国内外分开显示）
         qos_str = ""
         if d['qos_enabled']:
+            qr = d['qos_result']
+            dom = qr.get('domestic', {})
+            intl = qr.get('international', {})
             qos_str = f"""
 ### 🌐 QoS 探测
 - 状态: {d['qos_status']}
 - 趋势: {d['qos_trend']}
-- 延迟: {d['qos_result'].get('latency_avg', 0):.0f}ms
-- 抖动: {d['qos_result'].get('jitter', 0):.0f}ms
-- 丢包: {d['qos_result'].get('loss', 0):.0f}%"""
+- 国内: {dom.get('avg', 0):.0f}ms / 抖动{dom.get('jitter', 0):.0f}ms / 丢包{dom.get('loss', 0):.0f}%
+- 跨境: {intl.get('avg', 0):.0f}ms / 抖动{intl.get('jitter', 0):.0f}ms / 丢包{intl.get('loss', 0):.0f}%"""
 
         chart_str = self._draw_traffic_chart(service)
 
