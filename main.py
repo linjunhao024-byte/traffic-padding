@@ -458,14 +458,16 @@ class BandwidthMonitor:
             self._alert_start_ts = 0
             self._alert_peak_mbps = 0
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            log_message("INFO", f"带宽恢复: {total_speed:.1f}Mbps, 告警持续 {duration // 60} 分钟")
+            dur_min = duration // 60
+            dur_sec = duration % 60
+            log_message("INFO", f"带宽恢复: {total_speed:.1f}Mbps, 告警持续 {dur_min}分{dur_sec}秒")
 
             if self.notifier_callback:
                 msg = (f"✅ 带宽恢复正常\n\n"
                        f"━━━━━━━━━━━━━━━━━━━━\n"
                        f"当前带宽: {total_speed:.1f} Mbps\n"
                        f"告警阈值: {threshold} Mbps\n"
-                       f"告警持续: {duration // 60} 分钟\n\n"
+                       f"本次带宽超限时间: {dur_min}分{dur_sec}秒\n\n"
                        f"时间: {ts}")
                 self.notifier_callback("✅ 带宽恢复", msg, "bandwidth_alert_recovery")
 
