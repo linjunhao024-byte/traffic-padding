@@ -1357,16 +1357,16 @@ do_update() {
         cache_bust=""
     fi
 
-    # 下载 main.py
+    # 下载 main.py（用版本标记验证是否最新）
     echo -ne "  下载 main.py..."
     if curl -sL "${mirror_url}https://raw.githubusercontent.com/linjunhao024-byte/Traffic-Tadding/main/main.py${cache_bust}" -o /tmp/main.py.new; then
-        # 验证文件有效性
-        if grep -q "class BandwidthMonitor" /tmp/main.py.new && grep -q "class TrafficPaddingService" /tmp/main.py.new; then
+        # 验证是否最新版本（检查最近新增的特征）
+        if grep -q "_alert_peak_mbps" /tmp/main.py.new && grep -q "_alert_history" /tmp/main.py.new; then
             echo -e " ${GREEN}✓${NC}"
         else
-            echo -e " ${RED}✗ (文件无效，可能镜像缓存)${NC}"
+            echo -e " ${RED}✗ (镜像缓存旧版本)${NC}"
             echo -e "  ${YELLOW}尝试直连 GitHub...${NC}"
-            if curl -sL "https://raw.githubusercontent.com/linjunhao024-byte/Traffic-Tadding/main/main.py" -o /tmp/main.py.new && grep -q "class BandwidthMonitor" /tmp/main.py.new; then
+            if curl -sL "https://raw.githubusercontent.com/linjunhao024-byte/Traffic-Tadding/main/main.py" -o /tmp/main.py.new && grep -q "_alert_peak_mbps" /tmp/main.py.new; then
                 echo -e "  ${GREEN}✓ 直连成功${NC}"
             else
                 echo -e "  ${RED}✗ 下载失败${NC}"
