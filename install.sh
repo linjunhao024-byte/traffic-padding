@@ -2118,7 +2118,7 @@ else:
                 printf "${CYAN}|${NC}  ${GREEN}${BOLD}%-69s${NC}${CYAN}|${NC}\n" "  |  ##      ##   ##   #  ##               |"
                 printf "${CYAN}|${NC}  ${GREEN}${BOLD}%-69s${NC}${CYAN}|${NC}\n" "  |  ##      ##   ##  #   ##               |"
                 printf "${CYAN}|${NC}  ${GREEN}${BOLD}%-69s${NC}${CYAN}|${NC}\n" "  |  ##      ##   ## #    ##               |"
-                printf "${CYAN}|${NC}  ${GREEN}${BOLD}%-69s${NC}${CYAN}|${NC}\n" "  |  ######  #### ##     ##               |"
+                printf "${CYAN}|${NC}  ${GREEN}${BOLD}%-69s${NC}${CYAN}|${NC}\n" "  |  ######  ####  ##     ##              |"
                 printf "${CYAN}|${NC}  ${GREEN}${BOLD}%-69s${NC}${CYAN}|${NC}\n" "  |                                       |"
                 printf "${CYAN}|${NC}  ${GREEN}${BOLD}%-69s${NC}${CYAN}|${NC}\n" "  +---------------------------------------+"
                 echo -e "${CYAN}|${NC}                                                                           ${CYAN}|${NC}"
