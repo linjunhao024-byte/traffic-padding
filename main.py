@@ -1797,17 +1797,16 @@ class BaseNotifier:
         stats = service.downloader.get_stats()
         period = service.get_period_stats(self.report_freq)
 
-        # 月流量字符串（每条 - 独立一行）
+        # 月流量字符串
         monthly_str = ""
         if self.monthly_quota_gb != 0:
             period = service.get_period_stats('monthly')
             monthly_used_gb = period['gb']
             if self.monthly_quota_gb == -1:
-                monthly_str = "\n-\n月总额度: 无限\n-\n已消耗: {:.3f} GB".format(monthly_used_gb)
+                monthly_str = f"\n- 月总额度: 无限\n- 已消耗: {monthly_used_gb:.3f} GB"
             elif self.monthly_quota_gb > 0:
                 monthly_pct = (monthly_used_gb / self.monthly_quota_gb) * 100
-                monthly_str = "\n-\n月总额度: {:.1f} GB\n-\n已消耗: {:.3f} GB\n-\n占比: {:.2f}%".format(
-                    self.monthly_quota_gb, monthly_used_gb, monthly_pct)
+                monthly_str = f"\n- 月总额度: {self.monthly_quota_gb:.1f} GB\n- 已消耗: {monthly_used_gb:.3f} GB\n- 占比: {monthly_pct:.2f}%"
 
         # 下载速度
         avg_speed = service.downloader.get_avg_speed()
@@ -2139,26 +2138,21 @@ class DingTalkNotifier(BaseNotifier):
         error_str = ""
         if d['error_lines']:
             for line in d['error_lines']:
-                error_str += f"\n-\n{line}"
+                error_str += f"\n- {line}"
 
         # URL 健康
-        url_health_str = f"\n-\n健康: {d['healthy_count']}/{d['url_count']}" if d['healthy_count'] else ""
+        url_health_str = f"\n- 健康: {d['healthy_count']}/{d['url_count']}" if d['healthy_count'] else ""
 
         # QoS 状态
         qos_str = ""
         if d['qos_enabled']:
             qos_str = f"""
 ### 🌐 QoS 探测
--
-状态: {d['qos_status']}
--
-趋势: {d['qos_trend']}
--
-延迟: {d['qos_result'].get('latency_avg', 0):.0f}ms
--
-抖动: {d['qos_result'].get('jitter', 0):.0f}ms
--
-丢包: {d['qos_result'].get('loss', 0):.0f}%"""
+- 状态: {d['qos_status']}
+- 趋势: {d['qos_trend']}
+- 延迟: {d['qos_result'].get('latency_avg', 0):.0f}ms
+- 抖动: {d['qos_result'].get('jitter', 0):.0f}ms
+- 丢包: {d['qos_result'].get('loss', 0):.0f}%"""
 
         chart_str = self._draw_traffic_chart(service)
 
@@ -2174,85 +2168,56 @@ class DingTalkNotifier(BaseNotifier):
                 else:
                     return f"{b / 1024:.0f} KB"
             bw_str = f"""### 📊 带宽监控
--
-入站峰值: {bt['rx_peak']:.1f} Mbps ({bt['rx_peak_time']})
--
-出站峰值: {bt['tx_peak']:.1f} Mbps ({bt['tx_peak_time']})
--
-入站平均: {bt['rx_avg']:.1f} Mbps
--
-出站平均: {bt['tx_avg']:.1f} Mbps
--
-总流量: RX {fmt_bytes(bt['rx_bytes'])} / TX {fmt_bytes(bt['tx_bytes'])}
--
-告警: {bt['alert_count']} 次"""
+- 入站峰值: {bt['rx_peak']:.1f} Mbps ({bt['rx_peak_time']})
+- 出站峰值: {bt['tx_peak']:.1f} Mbps ({bt['tx_peak_time']})
+- 入站平均: {bt['rx_avg']:.1f} Mbps
+- 出站平均: {bt['tx_avg']:.1f} Mbps
+- 总流量: RX {fmt_bytes(bt['rx_bytes'])} / TX {fmt_bytes(bt['tx_bytes'])}
+- 告警: {bt['alert_count']} 次"""
 
         # AI 分析段
         ai_str = ""
         if d['ai_analysis']:
             ai_str = f"\n\n### 🤖 AI 分析\n\n{d['ai_analysis']}"
 
-        # 构建报告（用 \n 分行，每条 - 独立一行）
+        # 构建报告（- 和内容同行，钉钉渲染为 •）
         report = f"""## 📋 Traffic Padding {d['freq_label']}
 **🖥️ {d['server_name']}**
 🕐 **{d['now'].strftime("%Y-%m-%d %H:%M")}**
 {bw_str}
 
 ### 📦 流量填充
--
-{period_str}
--
-累计总量: {d['total_gb']:.3f} GB
--
-今日配额: {d['quota_used'] / (1024**3):.3f} / {d['daily_quota_gb']:.1f} GB
-{d['monthly_str']}
+- {period_str}
+- 累计总量: {d['total_gb']:.3f} GB
+- 今日配额: {d['quota_used'] / (1024**3):.3f} / {d['daily_quota_gb']:.1f} GB{d['monthly_str']}
 
 ### 📈 下载性能
--
-平均速度: {d['avg_speed']:.2f} MB/s
--
-最快来源: {d['fastest'][0]} ({d['fastest'][1]:.1f} MB/s)
--
-最慢来源: {d['slowest'][0]} ({d['slowest'][1]:.1f} MB/s)
+- 平均速度: {d['avg_speed']:.2f} MB/s
+- 最快来源: {d['fastest'][0]} ({d['fastest'][1]:.1f} MB/s)
+- 最慢来源: {d['slowest'][0]} ({d['slowest'][1]:.1f} MB/s)
 
 ### 📊 流量对比
--
-实际 RX: {d['net_stats']['rx_mb']:.1f} MB
--
-实际 TX: {d['net_stats']['tx_mb']:.1f} MB
--
-填充下载: {d['stats']['total_downloaded_mb']:.1f} MB
--
-填充占比: {d['fill_ratio']:.1f}%
+- 实际 RX: {d['net_stats']['rx_mb']:.1f} MB
+- 实际 TX: {d['net_stats']['tx_mb']:.1f} MB
+- 填充下载: {d['stats']['total_downloaded_mb']:.1f} MB
+- 填充占比: {d['fill_ratio']:.1f}%
 
 ### 🔗 URL 状态
--
-总数: {d['url_count']} 个{url_health_str}
--
-成功: {d['stats']['success_count']} 次
--
-失败: {d['stats']['fail_count']} 次
-{error_str}
-{qos_str}
+- 总数: {d['url_count']} 个{url_health_str}
+- 成功: {d['stats']['success_count']} 次
+- 失败: {d['stats']['fail_count']} 次{error_str}{qos_str}
 
 {chart_str}
 
 ### 📈 运行状态
--
-周期: {d['cycle_count']}
--
-任务: {d['stats']['task_count']}
--
-时长: {d['uptime']}
+- 周期: {d['cycle_count']}
+- 任务: {d['stats']['task_count']}
+- 时长: {d['uptime']}
 
 ### ⚙️ 配置
--
-网卡: {d['interface']}
--
-比例: 1:{d['target_ratio']}
--
-权重: {d['time_weight']:.2f}x
-{ai_str}"""
+- 网卡: {d['interface']}
+- 比例: 1:{d['target_ratio']}
+- 权重: {d['time_weight']:.2f}x{ai_str}"""
         return report
 
 
