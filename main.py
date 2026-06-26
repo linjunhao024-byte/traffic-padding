@@ -2103,19 +2103,32 @@ class DingTalkNotifier(BaseNotifier):
             return ""
 
         max_val = max(rx_mb, tx_mb, download_mb, 0.01)
+        bar_width = 30
 
-        def draw_bar(label, value, width=20):
-            filled = int((value / max_val) * width) if max_val > 0 else 0
-            bar = '█' * filled + '░' * (width - filled)
-            if value >= 1:
-                return f"{label} {bar} {value:.1f}MB"
-            else:
-                return f"{label} {bar} {value*1024:.0f}KB"
+        def fmt_val(v):
+            return f"{v:.1f}MB" if v >= 1 else f"{v*1024:.0f}KB"
 
-        return f"""### 📊 流量柱状图
-{draw_bar('RX ', rx_mb)}
-{draw_bar('TX ', tx_mb)}
-{draw_bar('填充', download_mb)}"""
+        def draw_bar(label, value):
+            filled = int((value / max_val) * bar_width) if max_val > 0 else 0
+            bar = '█' * filled + '░' * (bar_width - filled)
+            return f"  {label:8s} {bar} {fmt_val(value):>9s}"
+
+        lines = [
+            "### 📊 流量柱状图",
+            "",
+            "```",
+            "┌─────────────────────────────────────────────────────┐",
+            "│                                                     │",
+            f"{draw_bar('上行 TX', tx_mb)}   │",
+            "│                                                     │",
+            f"{draw_bar('下行 RX', rx_mb)}   │",
+            "│                                                     │",
+            f"{draw_bar('填充', download_mb)}   │",
+            "│                                                     │",
+            "└─────────────────────────────────────────────────────┘",
+            "```",
+        ]
+        return "\n".join(lines)
 
     def build_report(self, service: 'TrafficPaddingService') -> str:
         d = self._collect_report_data(service)
