@@ -706,8 +706,8 @@ class AIAnalyzer:
 
         prompt = (
             "你是服务器流量分析助手。根据以下数据：\n"
-            "1.判断流量是否正常(正常/异常) 2.指出具体问题 3.给一条可操作建议\n"
-            "用中文回答，80字以内，不要复述数据。\n\n"
+            "1.判断流量是否正常(正常/异常) 2.指出具体问题和可能原因 3.给出可操作建议\n"
+            "用中文回答，150字以内，不要复述原始数据。\n\n"
             f"{data_summary}"
         )
 
@@ -716,7 +716,7 @@ class AIAnalyzer:
             "temperature": 0.6,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
-            "max_tokens": 200,
+            "max_tokens": 400,
         }).encode('utf-8')
 
         headers = {
