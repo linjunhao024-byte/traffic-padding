@@ -2823,6 +2823,7 @@ class TrafficPaddingService:
 
     def run(self):
         log_message("INFO", "=" * 50)
+        log_message("INFO", f"LIN-Padding v{__version__}")
         log_message("INFO", "Traffic Padding 微服务启动")
         log_message("INFO", f"网卡: {self.config.get('interface')} | 比例: 1:{self.config.get('target_ratio')} | 配额: {self.config.get('max_daily_extra_gb')}GB")
         log_message("INFO", "=" * 50)
