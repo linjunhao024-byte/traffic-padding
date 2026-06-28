@@ -566,12 +566,12 @@ try:
         quota_limit = c.get('max_daily_extra_gb', 10)
 except: pass
 
-# 任务数
-task_count = 0
+# 今日下载量
+download_gb = 0
 try:
     with open(os.path.join(config_dir, 'stats.json')) as f:
         s = json.load(f)
-        task_count = s.get('daily_stats', {}).get(today, 0)
+        download_gb = s.get('daily_stats', {}).get(today, 0) / 1073741824
 except: pass
 
 # QoS
@@ -586,7 +586,7 @@ try:
             qos = {'good': '✓ 正常', 'warning': '⚠ 拥堵', 'bad': '✗ 严重拥堵', 'error': '✗ 探测失败'}.get(level, level)
 except: pass
 
-print(f\"今日: {quota_used/1073741824:.3f}/{quota_limit}GB  任务: {task_count}  QoS: {qos}\")
+print(f\"今日: {quota_used/1073741824:.3f}/{quota_limit}GB  填充: {download_gb:.3f}GB  QoS: {qos}\")
 " 2>/dev/null || echo "今日: 读取失败")
 
     echo -e "${CYAN}+---------------------------------------------------------------------------+${NC}"
