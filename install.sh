@@ -1545,11 +1545,12 @@ main() {
         echo -e "${CYAN}|${NC}  ${CYAN}[9]${NC} 编辑配置     ${CYAN}[10]${NC} 开机自启     ${GREEN}[11]${NC} 网卡与下载                      ${CYAN}|${NC}"
         echo -e "${CYAN}|${NC}  ${RED}[12]${NC} 卸载         ${GREEN}[13]${NC} 一键更新     ${YELLOW}[14]${NC} 自动面板: $(get_auto_panel_status)       ${CYAN}|${NC}"
         echo -e "${CYAN}|${NC}  ${GREEN}[15]${NC} 流量与带宽   ${GREEN}[16]${NC} 告警设置     ${GREEN}[17]${NC} AI分析: $(get_ai_status)              ${CYAN}|${NC}"
+        echo -e "${CYAN}|${NC}  ${YELLOW}[18]${NC} 清空记录                                                                ${CYAN}|${NC}"
         echo -e "${CYAN}+===========================================================================+${NC}"
         echo -e "${CYAN}|${NC}  ${CYAN}[0]${NC} 退出         ${DIM}[A]${NC} 关于                                                    ${CYAN}|${NC}"
         echo -e "${CYAN}+===========================================================================+${NC}"
         echo ""
-        echo -ne "  请选择 [0-17, A]: "
+        echo -ne "  请选择 [0-18, A]: "
         read choice
 
         case "$choice" in
@@ -2128,6 +2129,92 @@ else:
                 echo -e "${CYAN}|${NC}                                                                           ${CYAN}|${NC}"
                 printf "${CYAN}|${NC}  ${DIM}%-69s${NC}${CYAN}|${NC}\n" "  https://github.com/linjunhao024-byte/Traffic-Tadding"
                 echo -e "${CYAN}+===========================================================================+${NC}"
+                wait_key
+                ;;
+            18)
+                # 清空记录
+                echo ""
+                echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
+                echo -e "${CYAN}|${NC}  ${BOLD}清空记录${NC}                                                      ${CYAN}|${NC}"
+                echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
+                echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
+                echo -e "${CYAN}|${NC}    ${CYAN}[1]${NC} 清空下载统计（配额+历史）                              ${CYAN}|${NC}"
+                echo -e "${CYAN}|${NC}    ${CYAN}[2]${NC} 清空带宽日志（CSV 文件）                                ${CYAN}|${NC}"
+                echo -e "${CYAN}|${NC}    ${CYAN}[3]${NC} 清空 QoS 探测历史                                       ${CYAN}|${NC}"
+                echo -e "${CYAN}|${NC}    ${CYAN}[4]${NC} 清空 URL 健康记录                                       ${CYAN}|${NC}"
+                echo -e "${CYAN}|${NC}    ${CYAN}[5]${NC} 清空 AI 分析缓存                                        ${CYAN}|${NC}"
+                echo -e "${CYAN}|${NC}    ${CYAN}[6]${NC} 全部清空                                                ${CYAN}|${NC}"
+                echo -e "${CYAN}|${NC}    ${CYAN}[0]${NC} 返回                                                    ${CYAN}|${NC}"
+                echo -e "${CYAN}|${NC}                                                            ${CYAN}|${NC}"
+                echo -e "${CYAN}+--------------------------------------------------------------+${NC}"
+                echo ""
+                echo -ne "  请选择 [0-6]: "
+                read clear_choice
+
+                case "$clear_choice" in
+                    1)
+                        echo ""
+                        echo -ne "  ${YELLOW}确认清空下载统计？(y/N):${NC} "
+                        read confirm
+                        if [[ "${confirm,,}" == "y" ]]; then
+                            rm -f "${CONFIG_DIR}/usage.json" "${CONFIG_DIR}/stats.json" "${CONFIG_DIR}/traffic_history.json"
+                            log_info "下载统计已清空"
+                        fi
+                        ;;
+                    2)
+                        echo ""
+                        local csv_count=$(ls "${CONFIG_DIR}/logs/"bandwidth_*.csv 2>/dev/null | wc -l)
+                        echo -ne "  ${YELLOW}确认清空 ${csv_count} 个 CSV 文件？(y/N):${NC} "
+                        read confirm
+                        if [[ "${confirm,,}" == "y" ]]; then
+                            rm -f "${CONFIG_DIR}/logs/"bandwidth_*.csv
+                            log_info "带宽日志已清空 (${csv_count} 个文件)"
+                        fi
+                        ;;
+                    3)
+                        echo ""
+                        echo -ne "  ${YELLOW}确认清空 QoS 探测历史？(y/N):${NC} "
+                        read confirm
+                        if [[ "${confirm,,}" == "y" ]]; then
+                            rm -f "${CONFIG_DIR}/qos_stats.json"
+                            log_info "QoS 历史已清空"
+                        fi
+                        ;;
+                    4)
+                        echo ""
+                        echo -ne "  ${YELLOW}确认清空 URL 健康记录？(y/N):${NC} "
+                        read confirm
+                        if [[ "${confirm,,}" == "y" ]]; then
+                            rm -f "${CONFIG_DIR}/url_health.json"
+                            log_info "URL 健康记录已清空"
+                        fi
+                        ;;
+                    5)
+                        echo ""
+                        echo -ne "  ${YELLOW}确认清空 AI 分析缓存？(y/N):${NC} "
+                        read confirm
+                        if [[ "${confirm,,}" == "y" ]]; then
+                            rm -f "${CONFIG_DIR}/ai_analysis.json"
+                            log_info "AI 分析缓存已清空"
+                        fi
+                        ;;
+                    6)
+                        echo ""
+                        echo -ne "  ${RED}⚠ 确认全部清空？此操作不可恢复 (y/N):${NC} "
+                        read confirm
+                        if [[ "${confirm,,}" == "y" ]]; then
+                            rm -f "${CONFIG_DIR}/usage.json" "${CONFIG_DIR}/stats.json" "${CONFIG_DIR}/traffic_history.json"
+                            rm -f "${CONFIG_DIR}/qos_stats.json" "${CONFIG_DIR}/url_health.json" "${CONFIG_DIR}/ai_analysis.json"
+                            rm -f "${CONFIG_DIR}/logs/"bandwidth_*.csv
+                            log_info "全部记录已清空"
+                        fi
+                        ;;
+                    0)
+                        ;;
+                    *)
+                        echo -e "  ${RED}无效选项${NC}"
+                        ;;
+                esac
                 wait_key
                 ;;
             0)
