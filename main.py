@@ -3,7 +3,7 @@
 # Traffic Padding Micro-Service v1.0.0
 # 流量伪装微服务：全天候随机微量碎片填充，使上下行流量比例自然化
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 
 import calendar
 import hashlib
