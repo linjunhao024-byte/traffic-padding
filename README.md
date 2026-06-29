@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.2.1-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.2.2-blue?style=flat-square" alt="Version">
   <a href="https://github.com/linjunhao024-byte/Traffic-Tadding/stargazers"><img src="https://img.shields.io/github/stars/linjunhao024-byte/Traffic-Tadding?style=flat-square&color=yellow&logo=github&cacheSeconds=60" alt="Stars"></a>
   <a href="https://github.com/linjunhao024-byte/Traffic-Tadding/network/members"><img src="https://img.shields.io/github/forks/linjunhao024-byte/Traffic-Tadding?style=flat-square&color=blue&logo=github&cacheSeconds=60" alt="Forks"></a>
   <a href="https://github.com/linjunhao024-byte/Traffic-Tadding/issues"><img src="https://img.shields.io/github/issues/linjunhao024-byte/Traffic-Tadding?style=flat-square&color=red&logo=github&cacheSeconds=60" alt="Issues"></a>
@@ -198,14 +198,7 @@ Traffic-Tadding/                   /opt/traffic-padding/
     "dingtalk_report_freq": "daily",  // 报告频率: daily/weekly/monthly
     "dingtalk_report_hour": 23,       // 推送时间 (24小时制)
     "dingtalk_monthly_reset_day": 1,  // 月额度重置日（月报用）
-    "qos_probe_enabled": true,        // 启用 QoS 探测
-    "qos_probe_targets": [            // 探测目标（国内外混合）
-        "https://cn.bing.com",       // 必应中国（国内优先）
-        "https://www.baidu.com",     // 百度
-        "https://dl.google.com",     // Google（跨境）
-        "https://www.apple.com"      // Apple（跨境）
-    ],
-    "qos_probe_count": 5,             // 每次探测的请求次数
+    "qos_probe_enabled": true,        // 启用 QoS 探测（TCP ping，国内外分离）
 
     // ── 带宽监控 ──
     "monitor_enabled": true,          // 启用带宽监控线程（1秒采样，1分钟写CSV）
@@ -292,7 +285,6 @@ Traffic-Tadding/                   /opt/traffic-padding/
 
 📈 运行状态
 ├ 周期: 1234
-├ 任务: 45
 └ 时长: 10小时17分钟
 
 ⚙️ 配置
